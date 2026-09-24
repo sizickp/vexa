@@ -1,8 +1,8 @@
-import { Page } from "playwright";
+import { Frame, Page } from "playwright";
 import { log, callJoiningCallback } from "../_host";
 import { BotConfig } from "../_host";
 import { AdmissionError } from "../shared/admission";
-import { attachTerminalConsoleWatch, findBodyText, isAdmitted } from "./admission";
+import { attachTerminalConsoleWatch, callFrame, findBodyText, isAdmitted } from "./admission";
 import {
   telemostHosts,
   telemostLoginHosts,
@@ -21,7 +21,9 @@ import {
 
 // NOTE vs the other platforms: Telemost is a hosted service (no self-hosted
 // deployments), and a meeting is addressed by a numeric id under `/j/`. The
-// page exposes no runtime API, so the whole join is driven through the DOM.
+// page exposes no runtime API, so the whole join is driven through the DOM —
+// of TWO documents: the messenger shell (announcements, "meeting not found")
+// and the call iframe (`/private-join/<id>`: name, mic/camera, join, call screen).
 // Per-speaker capture and recording are HOST concerns and stay outside this brick.
 
 // The app rewrites a loaded meeting's path to `/@/j/<id>`; a link copied from the address bar
@@ -61,9 +63,16 @@ export function buildTelemostMeetingUrl(meetingUrl: string): string {
   return `https://${url.hostname.toLowerCase()}/j/${m[1]}`;
 }
 
-/** Click the first VISIBLE element matching one of `selectors`, DOM-direct. Returns the selector. */
-async function clickFirstVisible(page: Page, selectors: string[]): Promise<string | null> {
-  return await page.evaluate((sels: string[]) => {
+/** The shell and, when attached, the call frame — where a click target may live. */
+function frames(page: Page): Frame[] {
+  const main = page.mainFrame();
+  const call = callFrame(page);
+  return call === main ? [main] : [call, main];
+}
+
+/** Click the first VISIBLE element matching one of `selectors` in `frame`, DOM-direct. */
+async function clickFirstVisibleIn(frame: Frame, selectors: string[]): Promise<string | null> {
+  return await frame.evaluate((sels: string[]) => {
     for (const sel of sels) {
       const el = document.querySelector(sel) as HTMLElement | null;
       if (el && el.offsetParent !== null && !(el as HTMLButtonElement).disabled) {
@@ -75,12 +84,21 @@ async function clickFirstVisible(page: Page, selectors: string[]): Promise<strin
   }, selectors).catch(() => null);
 }
 
+/** Click the first visible match in the call frame, then in the shell. Returns the selector. */
+async function clickFirstVisible(page: Page, selectors: string[]): Promise<string | null> {
+  for (const frame of frames(page)) {
+    const hit = await clickFirstVisibleIn(frame, selectors);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 /** Click the button/link whose text matches one of `phrases` (case-insensitive), DOM-direct.
  *  An EXACT text match wins over a substring match, so a generic phrase ("join") never lands on
  *  a longer control that merely contains it. Sign-in controls are never candidates — a guest
  *  bot that clicks "Войти" ends up on the Yandex ID page. Returns the matched text, or null. */
-async function clickByText(page: Page, phrases: string[]): Promise<string | null> {
-  return await page.evaluate(({ ps, loginIds }: { ps: string[]; loginIds: string[] }) => {
+async function clickByTextIn(frame: Frame, phrases: string[]): Promise<string | null> {
+  return await frame.evaluate(({ ps, loginIds }: { ps: string[]; loginIds: string[] }) => {
     const candidates = (Array.from(
       document.querySelectorAll('button, a, [role="button"]'),
     ) as HTMLElement[]).filter((el) =>
@@ -96,6 +114,15 @@ async function clickByText(page: Page, phrases: string[]): Promise<string | null
     pick.click();
     return textOf(pick);
   }, { ps: phrases, loginIds: telemostLoginTestIds }).catch(() => null);
+}
+
+/** Text click in the call frame, then in the shell. */
+async function clickByText(page: Page, phrases: string[]): Promise<string | null> {
+  for (const frame of frames(page)) {
+    const hit = await clickByTextIn(frame, phrases);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** A pre-admission dead end — the sign-in wall or a meeting that does not exist. Both are
@@ -138,7 +165,7 @@ async function reachPrejoin(page: Page): Promise<"prejoin" | "admitted" | "unkno
       continue;
     }
 
-    const prejoinUp = await page.locator(telemostNameInputSelector).first()
+    const prejoinUp = await callFrame(page).locator(telemostNameInputSelector).first()
       .isVisible({ timeout: 300 }).catch(() => false);
     if (prejoinUp) return "prejoin";
     if (await isAdmitted(page)) return "admitted";
@@ -179,7 +206,7 @@ export async function joinTelemostMeeting(
 
   // Fill the display name with REAL keyboard events — a React-controlled input only
   // enables the join button on genuine input events, not on a synthetic value-set.
-  const nameField = page.locator(telemostNameInputSelector).first();
+  const nameField = callFrame(page).locator(telemostNameInputSelector).first();
   const current = await nameField.inputValue().catch(() => "");
   if (current !== botName) {
     await nameField.click({ timeout: 5000 }).catch(() => {});

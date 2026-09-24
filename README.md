@@ -448,7 +448,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 |---|---|
 | Bot joins **Meet / Teams / Zoom** | ✅ Production |
 | Bot joins **Jitsi Meet** (meet.jit.si + self-hosted) | 🆕 Built & offline-proven; live validation pending |
-| Bot joins **Yandex Telemost** (telemost.yandex.ru + Yandex 360) | 🆕 Built & unit-tested; live validation pending |
+| Bot joins **Yandex Telemost** (telemost.yandex.ru + Yandex 360) | 🆕 Join, speaker names and audio capture witnessed live; end-to-end transcript pending |
 | Real-time transcription (Whisper) + speaker attribution | ✅ Production — attribution is not guaranteed: the binder publishes an empty speaker rather than guessing (~4–7% of rows under heavy crosstalk) |
 | Redis transcript streaming | ✅ Production |
 | Recordings to your own object storage (MinIO) | ✅ Available |

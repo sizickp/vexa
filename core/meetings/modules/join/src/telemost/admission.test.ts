@@ -31,13 +31,17 @@ function makePage(screen: Screen): any {
     body: { innerText: screen.text },
     querySelector: (_s: string) => (screen.prejoin ? { offsetParent: {} } : null),
   };
-  return {
+  const page: any = {
+    mainFrame: () => page,
+    frames: () => [page],
+    url: () => "https://telemost.yandex.ru/j/12345678901234",
     async evaluate(fn: any, arg?: any) { return fn(arg); },
     async waitForTimeout(_ms: number) {},
     locator(sel: string) {
       return { first: () => ({ isVisible: async () => screen.visible.includes(sel) }) };
     },
   };
+  return page;
 }
 
 const LEAVE = 'button[aria-label*="Покинуть" i]';

@@ -2,11 +2,16 @@ import { Page } from "playwright";
 import { log, logJSON, callLeaveCallback, stopTelemostRecording } from "../_host";
 import { BotConfig } from "../_host";
 import { leaveBrowserClick, type BrowserContextButtonMatcher } from "../shared/leave-click";
-import { telemostLeaveButtonSelectors, telemostLeaveConfirmTexts } from "./selectors";
+import { callFrame } from "./admission";
+import { telemostLeaveButtonSelectors, telemostLeaveConfirmTexts, telemostShellHangupSelectors } from "./selectors";
 
 /** The leave control, strongest selector first. */
 const leaveButtonMatchers: BrowserContextButtonMatcher[] =
   telemostLeaveButtonSelectors.map((css) => ({ css }));
+
+/** The shell call bar's hang-up — the fallback when the call frame's toolbar is unreachable. */
+const shellHangupMatchers: BrowserContextButtonMatcher[] =
+  telemostShellHangupSelectors.map((css) => ({ css }));
 
 /** The "leave or end for everyone" confirmation — the bot always picks plain leave. */
 const leaveConfirmMatchers: BrowserContextButtonMatcher[] =
@@ -40,12 +45,14 @@ export async function leaveTelemostMeeting(
   }
 
   try {
-    const clicked = await page.evaluate(leaveBrowserClick, leaveButtonMatchers).catch(() => false);
+    const frame = callFrame(page);
+    const clicked = await frame.evaluate(leaveBrowserClick, leaveButtonMatchers).catch(() => false)
+      || await page.mainFrame().evaluate(leaveBrowserClick, shellHangupMatchers).catch(() => false);
     if (clicked) {
       log("[Telemost] Clicked the leave control");
       await page.waitForTimeout(800);
       // A confirmation dialog may follow; answer it with plain leave. No dialog → no-op.
-      const confirmed = await page.evaluate(leaveBrowserClick, leaveConfirmMatchers).catch(() => false);
+      const confirmed = await callFrame(page).evaluate(leaveBrowserClick, leaveConfirmMatchers).catch(() => false);
       if (confirmed) log("[Telemost] Confirmed leave in the dialog");
       await page.waitForTimeout(1500);
     } else {

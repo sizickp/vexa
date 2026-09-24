@@ -24,7 +24,7 @@ import { waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent } from "./ji
 import { leaveJitsiMeeting } from "./jitsi/leave";
 import { startJitsiRemovalMonitor } from "./jitsi/removal";
 import { joinTelemostMeeting, buildTelemostMeetingUrl, isTelemostHost } from "./telemost/join";
-import { waitForTelemostMeetingAdmission, checkForTelemostAdmissionSilent } from "./telemost/admission";
+import { waitForTelemostMeetingAdmission, checkForTelemostAdmissionSilent, callFrame as telemostCallFrame } from "./telemost/admission";
 import { leaveTelemostMeeting } from "./telemost/leave";
 import { startTelemostRemovalMonitor } from "./telemost/removal";
 import { startDebugView } from "./shared/escalation";
@@ -168,3 +168,6 @@ export type { TeamsJoinRedirectReason } from "./msteams/auth-redirect";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };
 export { joinTelemostMeeting, buildTelemostMeetingUrl, isTelemostHost, waitForTelemostMeetingAdmission, checkForTelemostAdmissionSilent, leaveTelemostMeeting, startTelemostRemovalMonitor };
+// The frame Telemost renders the call in (a same-origin iframe inside the messenger shell) — where
+// an embedder's page-side capture must run for this platform.
+export { telemostCallFrame };

@@ -1,4 +1,4 @@
-import { Page } from "playwright";
+import { Frame, Page } from "playwright";
 import { log, callAwaitingAdmissionCallback } from "../_host";
 import { BotConfig } from "../_host";
 import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
@@ -15,7 +15,28 @@ import {
   telemostBannedPageIndicators,
   telemostLoginHosts,
   telemostTerminalConsolePattern,
+  telemostCallFramePattern,
 } from "./selectors";
+
+/** The frame the call renders in — the `/private-join/<id>` iframe inside the messenger shell.
+ *  Falls back to the main frame while the iframe is not attached (early load, or a build that
+ *  renders the call in the top document). */
+export function callFrame(page: Page): Frame {
+  return page.frames().find((f) => f !== page.mainFrame() && telemostCallFramePattern.test(f.url()))
+    ?? page.mainFrame();
+}
+
+/** True once the call iframe is attached. */
+export function hasCallFrame(page: Page): boolean {
+  return page.frames().some((f) => f !== page.mainFrame() && telemostCallFramePattern.test(f.url()));
+}
+
+/** The documents a text verdict may live in: the shell and, when attached, the call frame. */
+function textFrames(page: Page): Frame[] {
+  const main = page.mainFrame();
+  const call = callFrame(page);
+  return call === main ? [main] : [main, call];
+}
 
 /** Telemost's media engine logs its disconnect code to the page console (KICKED_OUT,
  *  ROOM_HAS_BEEN_CLOSED…). Latched host-side so a kick or a closed room is recognised even
@@ -38,25 +59,30 @@ export function terminalConsoleCode(page: Page): string | null {
   return (page as any).__vexaTelemostTerminalCode ?? null;
 }
 
-/** Case-insensitive scan of the page's visible text for the first matching phrase. */
+/** Case-insensitive scan of the visible text — shell and call frame — for the first matching phrase. */
 export async function findBodyText(page: Page, phrases: string[]): Promise<string | null> {
-  return await page.evaluate((ps: string[]) => {
-    const body = (document.body?.innerText || "").toLowerCase();
-    for (const p of ps) if (body.includes(p.toLowerCase())) return p;
-    return null;
-  }, phrases).catch(() => null);
+  for (const frame of textFrames(page)) {
+    const hit = await frame.evaluate((ps: string[]) => {
+      const body = (document.body?.innerText || "").toLowerCase();
+      for (const p of ps) if (body.includes(p.toLowerCase())) return p;
+      return null;
+    }, phrases).catch(() => null);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** The leave control is call-toolbar-only — never rendered on the pre-join or waiting screens. */
 export async function isLeaveVisible(page: Page): Promise<boolean> {
+  const frame = callFrame(page);
   for (const sel of telemostLeaveButtonSelectors) {
-    if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+    if (await frame.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
   }
   return false;
 }
 
 async function isPrejoinPresent(page: Page): Promise<boolean> {
-  return await page.evaluate((sels: string[]) => {
+  return await callFrame(page).evaluate((sels: string[]) => {
     return sels.some((s) => {
       const el = document.querySelector(s) as HTMLElement | null;
       return !!el && el.offsetParent !== null;
@@ -82,8 +108,9 @@ export async function isAdmitted(page: Page): Promise<boolean> {
     if (await isPrejoinPresent(page)) return false;
     if (await isInLobby(page)) return false;
     if (await isLeaveVisible(page)) return true;
+    const frame = callFrame(page);
     for (const sel of telemostConferenceIndicators) {
-      if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+      if (await frame.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
     }
     return false;
   } catch {
@@ -93,8 +120,10 @@ export async function isAdmitted(page: Page): Promise<boolean> {
 
 /** The banned page a kicked participant lands on (no return for 24 h). */
 export async function isBannedPage(page: Page): Promise<boolean> {
-  for (const sel of telemostBannedPageIndicators) {
-    if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+  for (const frame of textFrames(page)) {
+    for (const sel of telemostBannedPageIndicators) {
+      if (await frame.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+    }
   }
   return false;
 }

@@ -35,7 +35,7 @@ import {
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
-import { getJoinBrowserArgs } from '@vexa/join';
+import { getJoinBrowserArgs, telemostCallFrame } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
@@ -684,6 +684,16 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
  *   // L4 (O6/VM): live-validated against a real meeting.
  *   Ported from services/vexa-bot/core/src/index.ts:1930, 1947–1957, 1598–1605.
  */
+type Frame = ReturnType<Page['mainFrame']>;
+
+/** Where the page-side capture runs. Telemost renders the call — its WebRTC peers and the
+ *  participants' <audio> elements — in a same-origin iframe inside the messenger shell, so
+ *  capture, recording and their teardown evaluate in that frame; every other platform uses the
+ *  page itself. The `exposeFunction` bindings and the init-script bundle reach every frame. */
+function captureTarget(page: Page, platform: string): Page | Frame {
+  return platform === 'telemost' ? (telemostCallFrame(page as any) as unknown as Frame) : page;
+}
+
 export async function startCaptureBridge(
   page: Page,
   inv: Invocation,
@@ -797,7 +807,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isPerTrack, isJitsi, isTelemost, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }) => {
+  await captureTarget(page, inv.platform).evaluate(async ({ isMixed, isPerTrack, isJitsi, isTelemost, isTeams, isZoom, botName, mainAudioGraceMs, mainAudioSilenceMs, mainAudioEnergyRms }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams/Jitsi ride the WebRTC hook (installRemoteAudioHook, installed pre-nav), which mirrors
@@ -1316,7 +1326,7 @@ export async function startCaptureBridge(
   return async () => {
     if (countersTimer) clearInterval(countersTimer);
     activity?.unavailable();
-    await page.evaluate(() => {
+    await captureTarget(page, inv.platform).evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
       try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
@@ -1360,7 +1370,9 @@ export async function startCaptureBridge(
  * closing page just rejects the evaluate. Returns whether a restart was actually requested.
  */
 export async function restartMixedCapture(page: Page): Promise<boolean> {
-  return await page.evaluate(() => {
+  // The mixed capture lives in whichever frame the bridge started it in (the call iframe on
+  // Telemost, the page elsewhere) — ask every frame; only the one holding the rescan answers.
+  const results = await Promise.all(page.frames().map((f) => f.evaluate(() => {
     const w = (globalThis as any) as Record<string, any>;
     if (!w.__vexaMixRescan) return false;   // not the mixed lane (or the bridge is already torn down)
     try {
@@ -1369,7 +1381,8 @@ export async function restartMixedCapture(page: Page): Promise<boolean> {
     w.__vexaMixedCapture = null;            // the rescan re-creates it (and re-signals ready)
     w.logBot?.('[mixed] capture restart requested (deaf-capture guard)');
     return true;
-  }).catch(() => false);
+  }).catch(() => false)));
+  return results.some(Boolean);
 }
 
 /**
@@ -1403,8 +1416,10 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
     recording.chunk(key, chunkSeq, isFinal, format, bytes);
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
-  // Page-side: start the generic recording tap (finds + combines the page audio elements).
-  await page.evaluate(async (timesliceMs) => {
+  // Page-side: start the generic recording tap (finds + combines the page audio elements) — in the
+  // frame the participants' <audio> lives in.
+  const target = captureTarget(page, inv.platform);
+  await target.evaluate(async (timesliceMs) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
@@ -1420,7 +1435,7 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
 
   // Stop fn: stop the recorder so it flushes the final (isFinal) chunk → master assembly.
   return async () => {
-    await page.evaluate(async () => {
+    await target.evaluate(async () => {
       const w = (globalThis as any) as Record<string, any>;
       try { await w.__vexaRecordingTap?.stop?.(); } catch { /* best-effort */ }
     }).catch(() => { /* page already gone */ });

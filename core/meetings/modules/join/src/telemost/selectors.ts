@@ -26,6 +26,14 @@ export const telemostHosts: string[] = [
   "telemost.360.yandex.com",
 ];
 
+// ---- The call frame ----
+// The page is a messenger shell; the call itself — pre-join card, waiting room,
+// call screen — renders in a same-origin iframe at `/private-join/<id>`. Every
+// call-control selector below is looked up inside that frame; the shell (main
+// frame) carries only the announcement modals, the "meeting not found" page and
+// the sign-in invitation.
+export const telemostCallFramePattern = /\/private-join\/\d+/;
+
 // ---- Web vs app choice ----
 // A meeting link may first offer the desktop app ("Подключение к звонку"); the
 // bot always stays in the browser.
@@ -103,6 +111,13 @@ export const telemostLeaveButtonSelectors: string[] = [
   'button[aria-label*="Покинуть" i]',
   'button[title*="Покинуть" i]',
   'button[aria-label*="Leave" i]',
+];
+
+// The shell's call bar ("Групповой звонок" mini-panel) carries its own hang-up —
+// the leave fallback when the call frame's toolbar is unreachable.
+export const telemostShellHangupSelectors: string[] = [
+  'button[aria-label="Завершить звонок"]',
+  'button[aria-label="End call"]',
 ];
 
 // Controls that render only in the call toolbar. Never sufficient alone —
@@ -201,4 +216,5 @@ export const browserContextSelectorArrays: string[] = [
   "telemostDismissSelectors",
   "telemostJoinButtonSelectors",
   "telemostPrejoinMuteSelectors",
+  "telemostShellHangupSelectors",
 ];

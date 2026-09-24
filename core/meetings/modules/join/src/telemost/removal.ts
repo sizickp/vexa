@@ -1,6 +1,6 @@
 import { Page } from "playwright";
 import { log } from "../_host";
-import { findBodyText, isBannedPage, isLeaveVisible, terminalConsoleCode } from "./admission";
+import { callFrame, findBodyText, hasCallFrame, isBannedPage, isLeaveVisible, terminalConsoleCode } from "./admission";
 import {
   telemostRemovalTexts,
   telemostPostMeetingIndicators,
@@ -15,7 +15,8 @@ import {
  *      ROOM_HAS_BEEN_CLOSED) — latched by join.ts before navigation.
  *   2. The kicked-with-ban page, or removal / end-of-call text
  *      ("вас удалили из звонка", "организатор завершил встречу для всех", …).
- *   3. Navigation away from the meeting path (`/j/<id>`).
+ *   3. Navigation away from the meeting path (`/j/<id>`), or the call iframe
+ *      detaching for N consecutive polls (the shell tears the call down).
  *   4. Leave control gone for N consecutive polls + a post-meeting screen
  *      (rating dialog / "create a call" home) — the weakest, so it needs both.
  * A grace period suppresses the DOM signals while the call UI is still settling
@@ -30,6 +31,9 @@ export function startTelemostRemovalMonitor(
   let stopped = false;
   let consecutiveLeaveMisses = 0;
   const LEAVE_MISS_THRESHOLD = 3;   // 3 misses × 3s poll = 9s
+  const FRAME_MISS_THRESHOLD = 3;   // call iframe gone 3 polls in a row
+  let consecutiveFrameMisses = 0;
+  const hadCallFrame = hasCallFrame(page);
   const joinedAtMs = Date.now();
   const GRACE_PERIOD_MS = 20_000;
 
@@ -72,6 +76,15 @@ export function startTelemostRemovalMonitor(
       }
 
       if (Date.now() - joinedAtMs >= GRACE_PERIOD_MS) {
+        if (hadCallFrame && !hasCallFrame(page)) {
+          consecutiveFrameMisses++;
+          if (consecutiveFrameMisses >= FRAME_MISS_THRESHOLD) {
+            await triggerRemoval(`Call frame detached ${consecutiveFrameMisses}x`);
+            return;
+          }
+        } else {
+          consecutiveFrameMisses = 0;
+        }
         if (await isBannedPage(page)) {
           await triggerRemoval("Kicked — banned page shown");
           return;
@@ -88,7 +101,10 @@ export function startTelemostRemovalMonitor(
           if (consecutiveLeaveMisses >= LEAVE_MISS_THRESHOLD) {
             let post: string | null = null;
             for (const sel of telemostPostMeetingIndicators) {
-              if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) { post = sel; break; }
+              for (const frame of [callFrame(page), page.mainFrame()]) {
+                if (await frame.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) { post = sel; break; }
+              }
+              if (post) break;
             }
             post = post ?? await findBodyText(page, telemostPostMeetingTexts);
             if (post) {
