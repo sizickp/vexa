@@ -14,6 +14,7 @@ import {
   applyTelemostSignal,
   telemostSignalState,
   emptyTelemostSignalState,
+  SENDING_FALLBACK_MS,
 } from "./index.js";
 
 let failed = 0;
@@ -114,12 +115,16 @@ async function main() {
   applyTelemostSignal(st, roster);
   applyTelemostSignal(st, slots([IGOR]));
   check("roster names come from the description", st.names.get(IGOR) === "Игорь Охрименко");
+  check("sendAudio on the roster channel is tracked per participant", st.sending.has(SERGEY) && st.sending.has(IGOR), JSON.stringify([...st.sending]));
+  applyTelemostSignal(st, JSON.stringify({ upsertDescription: { description: [{ id: SERGEY, meta: { name: "Сергей" }, sendAudio: false }] } }));
+  check("a later description turns sendAudio off again", !st.sending.has(SERGEY) && st.sending.has(IGOR));
+  check("participant slots are counted; share and self-view slots are not", st.participantSlots === 2, String(st.participantSlots));
   check("a speaking participant's slot VAD is read; screen-share and self-view slots are not speakers",
     st.speaking.size === 1 && st.speaking.has(IGOR), JSON.stringify([...st.speaking]));
   applyTelemostSignal(st, JSON.stringify({ removeDescription: { description: [{ id: IGOR }] } }));
-  check("a removed participant drops out of the roster and the speakers", !st.names.has(IGOR) && !st.speaking.has(IGOR));
+  check("a removed participant drops out of the roster, the speakers and the senders", !st.names.has(IGOR) && !st.speaking.has(IGOR) && !st.sending.has(IGOR));
   applyTelemostSignal(st, "not json");
-  check("a non-JSON frame is ignored", st.messages === 3);
+  check("a non-JSON frame is ignored", st.messages === 4);
 
   const hello = emptyTelemostSignalState();
   applyTelemostSignal(hello, JSON.stringify({ serverHello: { conference: { participants: [
@@ -128,9 +133,12 @@ async function main() {
     { participantAudioOnlyByMid: { participantId: IGOR, mid: "audio_1" }, vad: true } ] } }));
   check("a roster nested in any message is found by its shape", hello.names.get(IGOR) === "Игорь Охрименко");
   check("a slot names its participant under any …ByMid key", hello.speaking.has(IGOR) && hello.unnamed.size === 0);
+  applyTelemostSignal(hello, JSON.stringify({ slotsConfig: { slots: [
+    { participant: { participantId: IGOR }, vad: true, pinned: false, label: "" }, { selfView: {}, vad: false } ] } }));
+  check("a camera-off participant's slot (`participant`, no mid) names them too", hello.speaking.has(IGOR) && hello.participantSlots === 1);
 
-  // A signal that reports a speaker the roster cannot name must not silence the tiles (two windows of
-  // one account, a roster not seen yet): the tiles answer until the signal has named somebody.
+  // A slot flag the roster cannot name is nobody; the tiles still answer — and the mode says the tap is read.
+  for (const t of tiles) t.speaking = false;
   (globalThis as any).__vexaTelemostSignal = emptyTelemostSignalState();
   applyTelemostSignal((globalThis as any).__vexaTelemostSignal, JSON.stringify({ slotsConfig: { slots: [
     { participantVideoByMid: { participantId: "no-roster-id", mid: "v" }, vad: true } ] } }));
@@ -138,8 +146,8 @@ async function main() {
   const ev3: Ev[] = [];
   const w3 = createTelemostSpeakers({ selfName: "Vexa", onSpeaking: (name, _id, isEnd) => ev3.push({ name, isEnd }), pollMs: 20 });
   await sleep(50);
-  check("outside a screen share the engine's (stale) slot flag is ignored — the tiles answer",
-    w3.getState().mode === "dom" && ev3.some((e) => e.name === "Alice" && !e.isEnd), JSON.stringify({ state: w3.getState(), ev3 }));
+  check("an unnamed slot flag names nobody; the speaking tile is still read",
+    w3.getState().mode === "dom+signal" && ev3.some((e) => e.name === "Alice" && !e.isEnd) && ev3.length === 1, JSON.stringify({ state: w3.getState(), ev3 }));
   w3.destroy();
   tiles[0].speaking = false;
   delete (globalThis as any).__vexaTelemostSignal;
@@ -175,18 +183,37 @@ async function main() {
     ev2.some((e) => e.name === "Сергей" && e.isEnd) && ev2.some((e) => e.name === "Игорь Охрименко" && !e.isEnd), JSON.stringify(ev2));
   w2.destroy();
 
-  // Back to the grid: the engine re-sends a configuration without a share slot, its flag still on Igor
-  // (stale — the grid does not re-lay out per speaker). Alice's tile speaks: only Alice is named.
+  // Back to the grid: the engine's flag is read there too (it is re-sent on every change), beside the tiles.
   engine.emit(JSON.stringify({ slotsConfig: { slots: [
     { participantVideoByMid: { participantId: IGOR, mid: "video_AB" }, vad: true } ] } }));
   tiles[0].speaking = true;
   const ev4: Ev[] = [];
   const w4 = createTelemostSpeakers({ selfName: "Vexa", onSpeaking: (name, _id, isEnd) => ev4.push({ name, isEnd }), pollMs: 20 });
   await sleep(50);
-  check("in the grid a stale engine flag names nobody; the speaking tile does",
-    w4.getState().mode === "dom" && ev4.some((e) => e.name === "Alice") && !ev4.some((e) => e.name === "Игорь Охрименко"), JSON.stringify({ state: w4.getState(), ev4 }));
+  check("in the grid the slot flag and the speaking tile both name their participant",
+    w4.getState().mode === "dom+signal" && ev4.some((e) => e.name === "Alice") && ev4.some((e) => e.name === "Игорь Охрименко"), JSON.stringify({ state: w4.getState(), ev4 }));
   w4.destroy();
   tiles[0].speaking = false;
+
+  // No tile and no slot names anybody (a layout with no participant slot), the roster says Sergey is
+  // transmitting: after the lull, sendAudio stands in — and it steps back the moment a tile speaks.
+  engine.emit(JSON.stringify({ slotsConfig: { slots: [ { participantScreenSharingByMid: { participantId: SERGEY, mid: "video_AC" }, vad: false }, { selfView: {}, vad: false } ] } }));
+  engine.emit(JSON.stringify({ upsertDescription: { description: [{ id: SERGEY, meta: { name: "Сергей" }, sendAudio: true }] } }));
+  const ev5: Ev[] = [];
+  const w5 = createTelemostSpeakers({ selfName: "Vexa", onSpeaking: (name, _id, isEnd) => ev5.push({ name, isEnd }), pollMs: 20, releaseMs: 60 });
+  await sleep(SENDING_FALLBACK_MS / 3);
+  check("sendAudio is not consulted before the lull has lasted", ev5.length === 0 && w5.getState().mode === "dom+signal", JSON.stringify({ state: w5.getState(), ev5 }));
+  await sleep(SENDING_FALLBACK_MS);
+  check("after the lull the roster's sendAudio names the sender",
+    w5.getState().mode === "sending" && ev5.some((e) => e.name === "Сергей" && !e.isEnd), JSON.stringify({ state: w5.getState(), ev5 }));
+  tiles[1].speaking = true;
+  await sleep(50);
+  check("a speaking tile takes over from the fallback at once",
+    w5.getState().mode === "dom+signal" && ev5.some((e) => e.name === "Bob" && !e.isEnd), JSON.stringify({ state: w5.getState(), ev5 }));
+  await sleep(120);
+  check("the fallback's speaker is released once the precise readings answer", ev5.some((e) => e.name === "Сергей" && e.isEnd), JSON.stringify(ev5));
+  w5.destroy();
+  tiles[1].speaking = false;
   delete (globalThis as any).__vexaTelemostSignal;
   delete (globalThis as any).WebSocket;
 

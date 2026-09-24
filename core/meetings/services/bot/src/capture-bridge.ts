@@ -35,7 +35,7 @@ import {
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
-import { getJoinBrowserArgs, telemostCallFrame } from '@vexa/join';
+import { getJoinBrowserArgs, getDisplayFillBrowserArgs, telemostCallFrame } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
@@ -593,6 +593,11 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
   const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  // Telemost's call frame lives inside a messenger shell that gives it whatever width the window
+  // leaves: at Chromium's default window on the bare Xvfb that is 549 px, and the share layout
+  // then carries no participant strip — no outline, no slot, no VAD. Witnessed live for Telemost
+  // only; the other platforms were validated at the default window and keep it.
+  if (inv.platform === 'telemost') args.push(...getDisplayFillBrowserArgs());
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).

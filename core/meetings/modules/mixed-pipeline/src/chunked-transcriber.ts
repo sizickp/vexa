@@ -143,6 +143,11 @@ const CLAIM_MIN_SHARE = Number((typeof process !== 'undefined' && process.env?.V
  *  first transition. If none arrives within this much audio, the transport is disarmed for the
  *  session and one `turn-source-fallback` observation says so. Tunable via VEXA_TURN_SOURCE_GRACE_MS. */
 const TURN_SOURCE_GRACE_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_TURN_SOURCE_GRACE_MS) || 20_000);
+/** HINT CUTS: a start-hint for a new name cuts the open turn this far before its arrival — the
+ *  'dom-active' onset lag the binder assumes — and never within this much of the turn's start, so a
+ *  flicker cannot leave a sliver of a turn behind. */
+const HINT_CUT_LAG_MS = 250;
+const HINT_CUT_MIN_TURN_MS = 300;
 /** ORPHAN CONTAINMENT. A turn that carries no track — a span the transport could not assign — is
  *  published as "Speaker". Some of those are genuinely unassignable (two people talking at once);
  *  others sit entirely inside one speaker's run with nobody else audible anywhere in them, and
@@ -232,6 +237,18 @@ export interface ChunkedTranscriberCallbacks {
   turnSource?: 'pyannote' | 'csrc' | 'auto';
   /** How long 'auto' waits for a first transport transition before disarming it. */
   turnSourceGraceMs?: number;
+  /** HINT CUTS (pyannote spine only). The segmenter cuts turns from the waveform, so a speaker who
+   *  takes over without a pause — or whose voice the model cannot tell from the last one — leaves
+   *  their first words inside the previous speaker's turn, and the platform hint that names them
+   *  arrives too late to move text that is already committed under another name. On a platform
+   *  whose hint is the server's own voice verdict (Telemost's slot VAD) the hint IS a turn edge:
+   *  with this on, a start-hint for a different name than the last one cuts the open turn at the
+   *  hint's onset (its arrival minus `hintCutLagMs`) and opens the next. Off by default — a tile
+   *  that lights on noise (Teams) would shred turns. */
+  hintCutsTurns?: boolean;
+  /** How far behind speech onset the platform's start-hint arrives; the cut lands that much
+   *  before the hint. Default: the binder's lag for 'dom-active' hints. */
+  hintCutLagMs?: number;
   /** OUR OWN display name. The bot is a participant in every meeting it records, so without this
    *  the namer cannot tell its own name in a roster from a person's — and on the m34 meeting that
    *  is exactly how a bot's name ended up on a human's speech. */
@@ -277,7 +294,7 @@ interface RingFrame { pcm: Float32Array; tMs: number }
 /** Segmentation lifecycle items on the serialized queue: a boundary opens a turn
  *  (speech start / speaker change) or closes the open one (speaker change / end). */
 type SegItem =
-  | { kind: 'open'; t0: number; segId: string; trackId?: string; contested?: boolean }
+  | { kind: 'open'; t0: number; segId: string; trackId?: string; contested?: boolean; hintCut?: boolean }
   | { kind: 'close'; t1: number; contextPadMs?: number };
 interface Turn {
   /** The per-turn segmentation id — the namer's key (no clustering). */
@@ -322,6 +339,10 @@ interface Turn {
   /** The transport's id for this turn's speaker (csrc spine only). When set, naming is the
    *  TrackNamer's job and the hint claim/re-resolution machinery is bypassed entirely. */
   trackId?: string;
+  /** Opened by a platform hint that named a new speaker mid-stretch (hintCutsTurns). The hint is
+   *  this turn's reason to exist, so the short-UI-switch guard — built for a tile flip with no
+   *  acoustic backing — does not hold it provisional. */
+  hintCut?: boolean;
   /** Two or more sources were audible across this span. The mix cannot be split, so this turn is
    *  published unattributed — never merged into either speaker's name. */
   contested?: boolean;
@@ -350,6 +371,10 @@ function rms(s: Float32Array): number {
 export class ChunkedTranscriber {
   private segmenter: BoundarySource | null = null;
   private segCounter = 0;
+  /** Hint cuts: the last name a start-hint carried, and how many cuts the hints have made. */
+  private lastHintName: string | null = null;
+  private hintCuts = 0;
+  private readonly hintCutLagMs: number;
   private readonly binder = new ClusterNameBinder({});
   private readonly log: (msg: string) => void;
 
@@ -430,6 +455,7 @@ export class ChunkedTranscriber {
     this.log = cb.log || (() => { /* silent */ });
     this.mode = cb.turnSource ?? 'pyannote';
     this.graceMs = cb.turnSourceGraceMs ?? TURN_SOURCE_GRACE_MS;
+    this.hintCutLagMs = cb.hintCutLagMs ?? HINT_CUT_LAG_MS;
     if (cb.clock) this.now = () => cb.clock!.now();
     this.trackNamer = new TrackNamer({
       selfName: cb.selfName,
@@ -636,6 +662,24 @@ export class ChunkedTranscriber {
     this.cb.onObservation?.({ type: 'turn-source-fallback', from: 'csrc', to: 'pyannote', reason, tMs: at, detail });
   }
 
+  /** A start-hint for a different name than the last one is a turn edge the segmenter did not
+   *  find: close the open turn at the hint's onset and open the next there, exactly as a
+   *  speaker→speaker boundary would. Pyannote spine only — on the transport spine the edges are
+   *  observed, not inferred, and a hint has nothing to correct. */
+  private cutOpenTurnForHint(name: string, tMs: number): void {
+    const previous = this.lastHintName;
+    this.lastHintName = name;
+    if (!this.cb.hintCutsTurns || this.authoritative !== 'pyannote' || !this.turn) return;
+    if (!previous || previous === name) return;
+    const at = Math.min(tMs - this.hintCutLagMs, this.latestAudioMs || tMs);
+    if (at < this.turn.t0 + HINT_CUT_MIN_TURN_MS) return;
+    this.queue.push({ kind: 'close', t1: at });
+    this.queue.push({ kind: 'open', t0: at, segId: `seg_${this.segCounter++}`, hintCut: true });
+    this.hintCuts++;
+    void this.pump();
+    this.log(`[ChunkedTranscriber] hint cut: ${previous} → ${name} at ${at}`);
+  }
+
   /** The callback bundle one spine writes into. Events from the spine that is NOT authoritative are
    *  dropped here — one write surface, one writer, decided in exactly one place. */
   private sourceCallbacks(kind: 'pyannote' | 'csrc'): TurnSourceCallbacks {
@@ -686,6 +730,7 @@ export class ChunkedTranscriber {
   /** Timestamped platform hint ("who's lit"). Also re-resolves turns that
    *  published provisionally — overlap evidence only, never inheritance. */
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
+    if (name && !isEnd) this.cutOpenTurnForHint(name, tMs);
     this.binder.recordHint({ name, tMs, kind, isEnd });
     // The SAME hint is also name evidence for a transport track. It is fed unconditionally rather
     // than only while the transport is authoritative: a track's name is earned over the whole
@@ -776,6 +821,7 @@ export class ChunkedTranscriber {
     commits: number; turns: number; queued: number; unresolved: number; suppressed: number;
     binder: ReturnType<ClusterNameBinder['stats']>;
     spine: 'pyannote' | 'csrc'; contested: number; orphans: number; orphansContained: number;
+    hintCuts: number;
     tracks: ReturnType<TrackNamer['stats']>;
     sources: Record<string, unknown>;
   } {
@@ -784,6 +830,7 @@ export class ChunkedTranscriber {
       unresolved: this.unresolved.length, suppressed: this.suppressedCount, binder: this.binder.stats(),
       spine: this.authoritative, contested: this.contestedTurns,
       orphans: this.orphanTurns, orphansContained: this.orphanContained,
+      hintCuts: this.hintCuts,
       tracks: this.trackNamer.stats(),
       sources: {
         pyannote: this.pyannoteSource?.health(),
@@ -917,7 +964,7 @@ export class ChunkedTranscriber {
   /** Open a new segmentation turn. Closes any still-open turn first (defensive —
    *  a 'close' normally precedes, but flicker can skip it). Does NOT submit —
    *  the pump submits the open turn once per drain batch (and ticks resubmit). */
-  private async openTurnApply(item: { t0: number; segId: string; trackId?: string; contested?: boolean }): Promise<void> {
+  private async openTurnApply(item: { t0: number; segId: string; trackId?: string; contested?: boolean; hintCut?: boolean }): Promise<void> {
     this.commitCounter++;
     if (this.turn) { const prev = this.turn; this.turn = null; await this.submitTurn(prev, true); }
     const t0 = Math.max(item.t0, this.confirmedHighWaterMs);
@@ -969,6 +1016,7 @@ export class ChunkedTranscriber {
       lastVoicedWallMs: this.now(), resolvedName: null,
       ...(item.trackId ? { trackId: item.trackId } : {}),
       ...(item.contested ? { contested: true } : {}),
+      ...(item.hintCut ? { hintCut: true } : {}),
     };
     if (item.contested) this.contestedTurns++;
     if (item.trackId) {
@@ -1508,6 +1556,7 @@ export class ChunkedTranscriber {
    *  hold it provisional rather than stamp a confident wrong name. */
   private shouldDeferShortUiSwitch(turn: Turn, speakerName: string, source: string): boolean {
     if (source !== 'window-match') return false;
+    if (turn.hintCut) return false;
     if (!this.isRealSpeakerName(speakerName)) return false;
     const prev = this.lastPublishedSpeaker;
     if (!prev || prev.name === speakerName) return false;

@@ -29,13 +29,13 @@ import { leaveTelemostMeeting } from "./telemost/leave";
 import { startTelemostRemovalMonitor } from "./telemost/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
-import { JOIN_BROWSER_ARGS, getJoinBrowserArgs } from "./browser-args";
+import { JOIN_BROWSER_ARGS, getJoinBrowserArgs, getDisplayFillBrowserArgs } from "./browser-args";
 
 export type { BotConfig, Hooks, JoinState };
 export { startDebugView, setHooks };
 // Canonical browser launch args — the vexa-bot service and the debug harness both
 // build on this ONE set (browser-args.ts), so join↔bot flags never drift.
-export { JOIN_BROWSER_ARGS, getJoinBrowserArgs };
+export { JOIN_BROWSER_ARGS, getJoinBrowserArgs, getDisplayFillBrowserArgs };
 
 export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "telemost";
 

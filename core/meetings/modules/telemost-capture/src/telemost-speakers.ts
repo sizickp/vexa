@@ -5,13 +5,16 @@
  * signal tap — the bot bundles the package into its page bundle). Consumed by the bot (bundled into
  * browser-utils.global.js; the capture bridge instantiates it post-admission).
  *
- * Signal:
- *  1. The participant tiles, always: the speaking tile's root gains a `rootStroke_*` class
- *     (CSS-module hashed, so matched by prefix) and its `…TextName…` node names the speaker;
- *     the bot's own tile is marked `selfView…`. The featured speaker can be drawn twice, so
- *     names are de-duplicated.
- *  2. With a screen shared, the presenter's tile carries no outline; the media engine's slot
- *     VAD (`telemost-signal.ts`) names the speakers of that layout and is added to the tiles'.
+ * Three readings of the same fact, in the order they are trusted:
+ *  1. The participant tiles: the speaking tile's root gains a `rootStroke_*` class (CSS-module
+ *     hashed, so matched by prefix) and its `…TextName…` node names the speaker; the bot's own
+ *     tile is marked `selfView…`. The featured speaker can be drawn twice, so names are de-duplicated.
+ *  2. The media engine's slot VAD (`telemost-signal.ts`) — the flag the outline is drawn from, read
+ *     straight off the socket; it names a speaker whose tile has no outline (the presenter's).
+ *  3. The roster channel's `sendAudio` — whether a participant's client is transmitting audio. It
+ *     is layout-free, so it still names people when the layout carries no participant tile or slot
+ *     at all (a screen share with no room for a strip); it is consulted only while 1 and 2 have
+ *     named nobody for a moment, because it can run on past the end of speech.
  * Several people can speak at once, so the watcher tracks a SET of speakers and emits
  * start/stop per participant.
  *
@@ -22,6 +25,12 @@
  */
 
 import { telemostSignalState } from "./telemost-signal.js";
+
+/** Which reading named the current speakers: the tiles alone (no tap in this frame), the tiles plus
+ *  the engine's slot VAD, or the roster's `sendAudio` standing in while those two name nobody. */
+export type SpeakerSource = "dom" | "dom+signal" | "sending";
+/** How long the tiles and the slot VAD must have named nobody before `sendAudio` is consulted. */
+export const SENDING_FALLBACK_MS = 1500;
 
 export interface TelemostSpeakersOptions {
   /** Bot display name — the bot's own tile is never reported. */
@@ -42,7 +51,7 @@ export interface TelemostSpeakersOptions {
 
 export interface TelemostSpeakers {
   destroy(): void;
-  getState(): { mode: "dom" | "dom+signal" | null; speaking: string[]; changes: number };
+  getState(): { mode: SpeakerSource | null; speaking: string[]; changes: number };
 }
 
 // A participant tile (grid / filmstrip / speaker view).
@@ -110,36 +119,40 @@ function isSelfTile(el: Element): boolean {
   try { return !!el.closest(SELF_SELECTOR); } catch { return false; }
 }
 
-/** Everyone speaking right now, and which sources said so.
- *
- *  The tiles are always read: in the grid their speaking outline tracks speech exactly. With a screen
- *  shared, the PRESENTER's tile gets no outline while they talk — there the engine's slot VAD (re-sent
- *  as the speaker changes in that layout) names them, and its speakers are added to the tiles'. Outside
- *  a share the engine's flag is as old as the last layout change and is not used. */
-function speakingNow(): { names: Set<string>; mode: "dom" | "dom+signal" } {
-  const names = speakingFromDom();
+/** Everyone speaking right now by the precise readings — the tiles' outline and the engine's slot
+ *  VAD, always both — plus, separately, who the roster says is transmitting audio. */
+function speakingNow(): { names: Set<string>; sending: Set<string>; tapped: boolean; marks: number } {
+  const dom = speakingFromDom();
+  const names = dom.names;
+  const sending = new Set<string>();
   const sig = telemostSignalState();
-  if (!sig || !sig.sharing) return { names, mode: "dom" };
+  if (!sig) return { names, sending, tapped: false, marks: dom.marks };
   for (const id of sig.speaking) {
     const name = sig.names.get(id);
     if (name) names.add(name);
   }
-  return { names, mode: "dom+signal" };
+  for (const id of sig.sending) {
+    const name = sig.names.get(id);
+    if (name) sending.add(name);
+  }
+  return { names, sending, tapped: true, marks: dom.marks };
 }
 
 /** Everyone whose tile currently carries a speaking marker. */
-function speakingFromDom(): Set<string> {
+function speakingFromDom(): { names: Set<string>; marks: number } {
   const names = new Set<string>();
+  let marks = 0;
   try {
     for (const sel of telemostSpeakingSelectors) {
       for (const el of Array.from(document.querySelectorAll(sel))) {
+        marks++;
         if (isSelfTile(el)) continue;
         const name = nameOfTile(el);
         if (name) names.add(name);
       }
     }
   } catch { /* a transient DOM state is not a failure — the next poll re-reads */ }
-  return names;
+  return { names, marks };
 }
 
 export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostSpeakers {
@@ -151,9 +164,11 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
   // name → { lastSeen, lastAssert }
   const active = new Map<string, { lastSeen: number; lastAssert: number }>();
   let changes = 0;
-  let mode: "dom" | "dom+signal" | null = null;
+  let mode: SpeakerSource | null = null;
   let lastReport = 0;
   const REPORT_MS = 30_000;
+  /** When the tiles or the slot VAD last named somebody — `sendAudio` stands in only after a lull. */
+  let lastPreciseAt = Date.now();
 
   const emit = (name: string, isEnd: boolean) => {
     try { opts.onSpeaking(name, `dom:${name}`, isEnd, Date.now()); } catch { /* never break capture */ }
@@ -162,17 +177,21 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
   const tick = () => {
     const now = Date.now();
     const read = speakingNow();
-    // A periodic account of the engine signal — the one line that tells, from a bot log alone, why
-    // a meeting was or was not named.
+    if (read.names.size > 0) lastPreciseAt = now;
+    const fallback = read.names.size === 0 && read.sending.size > 0 && now - lastPreciseAt >= SENDING_FALLBACK_MS;
+    const source: SpeakerSource = fallback ? "sending" : read.tapped ? "dom+signal" : "dom";
+    const seen = fallback ? read.sending : read.names;
+    // A periodic account of every reading — the one line that tells, from a bot log alone, why a
+    // meeting was or was not named.
     if (now - lastReport >= REPORT_MS) {
       lastReport = now;
       const sig = telemostSignalState();
+      const vw = typeof innerWidth === "number" ? `${innerWidth}x${innerHeight}` : "?";
       log(sig
-        ? `signal: messages=${sig.messages} slotConfigs=${sig.slotConfigs} vadSlots=${sig.vadSlots} roster=${sig.names.size} unnamed=${sig.unnamed.size} sharing=${sig.sharing} mode=${read.mode}`
-        : `signal: no tap in this frame · mode=${read.mode}`);
+        ? `signal: messages=${sig.messages} slotConfigs=${sig.slotConfigs} participantSlots=${sig.participantSlots} vadSlots=${sig.vadSlots} roster=${sig.names.size} unnamed=${sig.unnamed.size} sharing=${sig.sharing} sending=${JSON.stringify(Array.from(read.sending))} marks=${read.marks} mode=${source} vw=${vw}`
+        : `signal: no tap in this frame · marks=${read.marks} mode=${source} vw=${vw}`);
     }
-    if (read.mode !== mode) { mode = read.mode; log(`speaker source → ${mode}`); }
-    const seen = read.names;
+    if (source !== mode) { mode = source; log(`speaker source → ${mode}`); }
     // The bot's own speech (TTS) must not name segments after the bot.
     if (self) for (const n of Array.from(seen)) if (n.toLowerCase() === self) seen.delete(n);
 
