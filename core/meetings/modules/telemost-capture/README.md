@@ -8,10 +8,11 @@ Runs **inside the meeting page**. Like Jitsi, Telemost delivers one mixed audio 
 
 - `installTelemostSignalTap` — installed at document start (the bot's init script, beside the WebRTC
   audio hook): observes the call frame's media-engine socket (goloom) — the roster (`id → name`) and each
-  participant slot's server-side `vad` flag from `slotsConfig`. It holds in every layout; a shared screen
-  shrinks or hides the tiles, and the tiles' outline then marks the featured tile, not the speaker.
-- `createTelemostSpeakers` — who is speaking: the engine's slot VAD when the tap is live, the participant
-  tiles' speaking marker otherwise; emits speaking start/stop per participant → a `mixed-capture.v1`
+  participant slot's server-side `vad` flag from `slotsConfig`. The engine re-sends slots on layout
+  changes: with a screen shared that is per speaker change, in the plain grid it can be minutes apart.
+- `createTelemostSpeakers` — who is speaking: the participant tiles' speaking outline always; with a
+  screen shared (the presenter's tile gets no outline) the engine's slot VAD is added. Emits speaking
+  start/stop per participant → a `mixed-capture.v1`
   **hint** (kind `dom-active`). Several people can speak at once, so it tracks a set of speakers; a short
   release window rides out flicker, and a ~2 s heartbeat re-asserts a still-speaking participant. This
   module OWNS the Telemost tile selector arrays.

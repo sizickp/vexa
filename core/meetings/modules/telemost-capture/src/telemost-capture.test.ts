@@ -138,7 +138,7 @@ async function main() {
   const ev3: Ev[] = [];
   const w3 = createTelemostSpeakers({ selfName: "Vexa", onSpeaking: (name, _id, isEnd) => ev3.push({ name, isEnd }), pollMs: 20 });
   await sleep(50);
-  check("an unproven signal (speaker without a roster name) leaves the tiles in charge",
+  check("outside a screen share the engine's (stale) slot flag is ignored — the tiles answer",
     w3.getState().mode === "dom" && ev3.some((e) => e.name === "Alice" && !e.isEnd), JSON.stringify({ state: w3.getState(), ev3 }));
   w3.destroy();
   tiles[0].speaking = false;
@@ -167,13 +167,26 @@ async function main() {
   const ev2: Ev[] = [];
   const w2 = createTelemostSpeakers({ selfName: "Vexa", onSpeaking: (name, _id, isEnd) => ev2.push({ name, isEnd }), pollMs: 20, heartbeatMs: 1000, releaseMs: 60 });
   await sleep(50);
-  check("with the tap live the watcher names the engine's speaker, not the (empty) tiles",
-    w2.getState().mode === "signal" && ev2.some((e) => e.name === "Сергей" && !e.isEnd), JSON.stringify({ state: w2.getState(), ev2 }));
+  check("with a screen shared the engine names the presenter the (empty) tiles cannot",
+    w2.getState().mode === "dom+signal" && ev2.some((e) => e.name === "Сергей" && !e.isEnd), JSON.stringify({ state: w2.getState(), ev2 }));
   engine.emit(slots([IGOR]));
   await sleep(120);
   check("a speaker change in the engine is a stop for one and a start for the other",
     ev2.some((e) => e.name === "Сергей" && e.isEnd) && ev2.some((e) => e.name === "Игорь Охрименко" && !e.isEnd), JSON.stringify(ev2));
   w2.destroy();
+
+  // Back to the grid: the engine re-sends a configuration without a share slot, its flag still on Igor
+  // (stale — the grid does not re-lay out per speaker). Alice's tile speaks: only Alice is named.
+  engine.emit(JSON.stringify({ slotsConfig: { slots: [
+    { participantVideoByMid: { participantId: IGOR, mid: "video_AB" }, vad: true } ] } }));
+  tiles[0].speaking = true;
+  const ev4: Ev[] = [];
+  const w4 = createTelemostSpeakers({ selfName: "Vexa", onSpeaking: (name, _id, isEnd) => ev4.push({ name, isEnd }), pollMs: 20 });
+  await sleep(50);
+  check("in the grid a stale engine flag names nobody; the speaking tile does",
+    w4.getState().mode === "dom" && ev4.some((e) => e.name === "Alice") && !ev4.some((e) => e.name === "Игорь Охрименко"), JSON.stringify({ state: w4.getState(), ev4 }));
+  w4.destroy();
+  tiles[0].speaking = false;
   delete (globalThis as any).__vexaTelemostSignal;
   delete (globalThis as any).WebSocket;
 

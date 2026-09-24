@@ -5,16 +5,15 @@
  * signal tap — the bot bundles the package into its page bundle). Consumed by the bot (bundled into
  * browser-utils.global.js; the capture bridge instantiates it post-admission).
  *
- * Signal, layered engine-first:
- *  1. The media engine's own slot VAD (`telemost-signal.ts`: `slotsConfig` over the call's
- *     signalling socket, names from its roster) — holds in every layout, a shared screen
- *     included. Used as soon as the tap has seen one slot configuration.
- *  2. DOM fallback for a frame without the tap: the participant tiles — the speaking tile's
- *     root gains a `rootStroke_*` class
- * (CSS-module hashed, so matched by prefix) and its `…TextName…` span names the
- * speaker; the bot's own tile is marked `selfView…`. The featured speaker can be
- * drawn twice, so names are de-duplicated. Several people can speak at once, so
- * the watcher tracks a SET of speakers and emits start/stop per participant.
+ * Signal:
+ *  1. The participant tiles, always: the speaking tile's root gains a `rootStroke_*` class
+ *     (CSS-module hashed, so matched by prefix) and its `…TextName…` node names the speaker;
+ *     the bot's own tile is marked `selfView…`. The featured speaker can be drawn twice, so
+ *     names are de-duplicated.
+ *  2. With a screen shared, the presenter's tile carries no outline; the media engine's slot
+ *     VAD (`telemost-signal.ts`) names the speakers of that layout and is added to the tiles'.
+ * Several people can speak at once, so the watcher tracks a SET of speakers and emits
+ * start/stop per participant.
  *
  * Speaking start/stop events feed the ChunkedTranscriber's name binder as
  * 'dom-active' hints (same protocol as the Jitsi/Zoom watchers) — INCLUDING the
@@ -43,7 +42,7 @@ export interface TelemostSpeakersOptions {
 
 export interface TelemostSpeakers {
   destroy(): void;
-  getState(): { mode: "signal" | "dom" | null; speaking: string[]; changes: number };
+  getState(): { mode: "dom" | "dom+signal" | null; speaking: string[]; changes: number };
 }
 
 // A participant tile (grid / filmstrip / speaker view).
@@ -111,25 +110,21 @@ function isSelfTile(el: Element): boolean {
   try { return !!el.closest(SELF_SELECTOR); } catch { return false; }
 }
 
-/** Everyone speaking right now, and which source said so.
+/** Everyone speaking right now, and which sources said so.
  *
- *  The engine signal is trusted once it has PROVEN itself — named at least one speaker through the
- *  roster. Until then, and on any tick where it reports a speaker the roster cannot name, the tiles
- *  answer: a half-read signal must never silence the source that works. Once proven, a signal that
- *  reports nobody speaking is silence (the tiles' outline is not a speaker in every layout). */
-function speakingNow(proven: { value: boolean }): { names: Set<string>; mode: "signal" | "dom" } {
+ *  The tiles are always read: in the grid their speaking outline tracks speech exactly. With a screen
+ *  shared, the PRESENTER's tile gets no outline while they talk — there the engine's slot VAD (re-sent
+ *  as the speaker changes in that layout) names them, and its speakers are added to the tiles'. Outside
+ *  a share the engine's flag is as old as the last layout change and is not used. */
+function speakingNow(): { names: Set<string>; mode: "dom" | "dom+signal" } {
+  const names = speakingFromDom();
   const sig = telemostSignalState();
-  if (sig && sig.slotConfigs > 0) {
-    const names = new Set<string>();
-    let unnamed = 0;
-    for (const id of sig.speaking) {
-      const name = sig.names.get(id);
-      if (name) names.add(name); else unnamed++;
-    }
-    if (names.size > 0) proven.value = true;
-    if (proven.value && unnamed === 0) return { names, mode: "signal" };
+  if (!sig || !sig.sharing) return { names, mode: "dom" };
+  for (const id of sig.speaking) {
+    const name = sig.names.get(id);
+    if (name) names.add(name);
   }
-  return { names: speakingFromDom(), mode: "dom" };
+  return { names, mode: "dom+signal" };
 }
 
 /** Everyone whose tile currently carries a speaking marker. */
@@ -156,8 +151,7 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
   // name → { lastSeen, lastAssert }
   const active = new Map<string, { lastSeen: number; lastAssert: number }>();
   let changes = 0;
-  let mode: "signal" | "dom" | null = null;
-  const proven = { value: false };
+  let mode: "dom" | "dom+signal" | null = null;
   let lastReport = 0;
   const REPORT_MS = 30_000;
 
@@ -167,14 +161,14 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
 
   const tick = () => {
     const now = Date.now();
-    const read = speakingNow(proven);
+    const read = speakingNow();
     // A periodic account of the engine signal — the one line that tells, from a bot log alone, why
     // a meeting was or was not named.
     if (now - lastReport >= REPORT_MS) {
       lastReport = now;
       const sig = telemostSignalState();
       log(sig
-        ? `signal: messages=${sig.messages} slotConfigs=${sig.slotConfigs} vadSlots=${sig.vadSlots} roster=${sig.names.size} unnamed=${sig.unnamed.size} proven=${proven.value} mode=${read.mode}`
+        ? `signal: messages=${sig.messages} slotConfigs=${sig.slotConfigs} vadSlots=${sig.vadSlots} roster=${sig.names.size} unnamed=${sig.unnamed.size} sharing=${sig.sharing} mode=${read.mode}`
         : `signal: no tap in this frame · mode=${read.mode}`);
     }
     if (read.mode !== mode) { mode = read.mode; log(`speaker source → ${mode}`); }

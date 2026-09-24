@@ -13,9 +13,11 @@
  *   - `slotsConfig` → `slots[]` (and `audioSlots[]`), each naming a participant
  *     (`participantVideoByMid` / `participantAudioByMid` → `participantId`) with a server-side
  *     `vad` flag — true while that participant is speaking.
- * The slot flag is the engine's own voice-activity verdict, so it holds in every layout — a shared
- * screen that shrinks or hides the participant tiles (where the DOM speaking outline lives) changes
- * nothing here. Screen-share and self-view slots carry no speaker and are skipped.
+ * The slot flag is the engine's voice-activity verdict AS OF THE LATEST SLOT CONFIGURATION — and the
+ * engine re-sends that configuration when its layout changes, not on every change of speaker. With a
+ * screen shared it re-lays out as the speaker changes (the flag then tracks speech); in the plain grid it
+ * can go minutes between configurations (the flag goes stale). `sharing` says which layout the latest
+ * configuration describes. Screen-share and self-view slots carry no speaker and are skipped.
  */
 
 export interface TelemostSignalState {
@@ -29,6 +31,8 @@ export interface TelemostSignalState {
   /** Slot observations with `vad: true`, and the speaking ids no roster entry has named (yet). */
   vadSlots: number;
   unnamed: Set<string>;
+  /** Whether the latest slot configuration carries a screen-share slot. */
+  sharing: boolean;
 }
 
 const STATE_KEY = "__vexaTelemostSignal";
@@ -39,7 +43,7 @@ export function telemostSignalState(): TelemostSignalState | null {
 }
 
 export function emptyTelemostSignalState(): TelemostSignalState {
-  return { names: new Map(), speaking: new Set(), messages: 0, slotConfigs: 0, vadSlots: 0, unnamed: new Set() };
+  return { names: new Map(), speaking: new Set(), messages: 0, slotConfigs: 0, vadSlots: 0, unnamed: new Set(), sharing: false };
 }
 
 /** Every `{ id, meta: { name } }` roster entry anywhere in a message — the roster rides several verbs
@@ -96,9 +100,11 @@ export function applyTelemostSignal(state: TelemostSignalState, raw: unknown): v
   if (cfg && typeof cfg === "object") {
     state.slotConfigs++;
     const speaking = new Set<string>();
+    let sharing = false;
     for (const list of [cfg.slots, cfg.audioSlots, cfg.videoSlots]) {
       if (!Array.isArray(list)) continue;
       for (const slot of list) {
+        if (typeof slot?.participantScreenSharingByMid?.participantId === "string") sharing = true;
         if (slot?.vad !== true) continue;
         const id = slotParticipant(slot);
         if (!id) continue;
@@ -108,6 +114,7 @@ export function applyTelemostSignal(state: TelemostSignalState, raw: unknown): v
       }
     }
     state.speaking = speaking;
+    state.sharing = sharing;
   }
 }
 
