@@ -21,6 +21,12 @@ that does not run agents has no use for any of it and may carry none of it.
 | `asks/` | the MCP edge's presets | no |
 | `workspaces/` | the workspace seeds — what a new personal/shared/org workspace is born as | no |
 
+`prompts/process-meeting.md` is the post-meeting report turn. flows format it with `{mid}`, `{native}`
+and `{date}` (literal braces doubled); the turn fetches the transcript itself — Bash →
+`http://gateway:8000/transcripts/by-id/{mid}` — with a `tx`-only API key it reads from the person's
+`_system/vexa-api-key` (kept out of that repo's commits via `.git/info/exclude`). A private tree at
+`VEXA_BEHAVIOR_DIR` overrides it.
+
 This README used to list `prompts/` and `workspaces/` as though the tree were fixed, and the code
 believed it: `flows_defs/production.py` read three files out of `prompts/` at MODULE IMPORT, so a
 deployment carrying only what it needs could not import the flow definitions at all. **Absent
