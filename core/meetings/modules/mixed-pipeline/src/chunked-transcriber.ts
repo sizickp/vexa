@@ -144,10 +144,18 @@ const CLAIM_MIN_SHARE = Number((typeof process !== 'undefined' && process.env?.V
  *  session and one `turn-source-fallback` observation says so. Tunable via VEXA_TURN_SOURCE_GRACE_MS. */
 const TURN_SOURCE_GRACE_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_TURN_SOURCE_GRACE_MS) || 20_000);
 /** HINT CUTS: a start-hint for a new name cuts the open turn this far before its arrival — the
- *  'dom-active' onset lag the binder assumes — and never within this much of the turn's start, so a
- *  flicker cannot leave a sliver of a turn behind. */
+ *  'dom-active' onset lag the binder assumes — and never a turn younger than HINT_CUT_MIN_TURN_MS
+ *  (tunable via VEXA_HINT_CUT_MIN_TURN_MS), so a flicker cannot leave a sliver of a turn behind.
+ *  Measured on four tapes: raising it to 1 s halves the cuts and doubles the rows that land under
+ *  the previous speaker — the segmenter does NOT reliably cut at a switch, so the hint must.
+ *  A fragment shorter than SHORT_FRAGMENT_MS that the binder's confidence gate leaves unnamed —
+ *  two names within the slack of a switch — takes the name with the most lit time over it, on a
+ *  platform whose hint is the server's verdict (hintCutsTurns): a boundary sliver under a real
+ *  name beats "Speaker". */
 const HINT_CUT_LAG_MS = 250;
-const HINT_CUT_MIN_TURN_MS = 300;
+const HINT_CUT_MIN_TURN_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_HINT_CUT_MIN_TURN_MS) || 300);
+const SHORT_FRAGMENT_MS = 1500;
+const SHORT_FRAGMENT_MIN_SUPPORT_MS = 200;
 /** ORPHAN CONTAINMENT. A turn that carries no track — a span the transport could not assign — is
  *  published as "Speaker". Some of those are genuinely unassignable (two people talking at once);
  *  others sit entirely inside one speaker's run with nobody else audible anywhere in them, and
@@ -306,6 +314,11 @@ interface Turn {
   t1: number;
   /** Audio confirmed & published up to here. */
   confirmedUpToMs: number;
+  /** Where this turn's transcribed audio begins — earlier than t0 when the gap-reclaim pulled in
+   *  speech the segmenter had declared silence. Naming reads THIS window: a turn the segmenter
+   *  opened and closed in one instant (t0 == t1) still carries seconds of reclaimed speech, and a
+   *  name looked up over its empty own span finds nothing but slack (meeting 22, "?" rows). */
+  coverFromMs: number;
   /** Recent submissions' words (LocalAgreement-N, newest first). Reset on confirm. */
   history: string[][];
   /** Confirmed-segment counter → stable ids turn:{turnId}:{seq}. */
@@ -371,6 +384,7 @@ export class ChunkedTranscriber {
   /** Hint cuts: the last name a start-hint carried, and how many cuts the hints have made. */
   private lastHintName: string | null = null;
   private hintCuts = 0;
+  private fragmentsNamedBySupport = 0;
   private readonly hintCutLagMs: number;
   private readonly binder = new ClusterNameBinder({});
   private readonly log: (msg: string) => void;
@@ -818,7 +832,7 @@ export class ChunkedTranscriber {
     commits: number; turns: number; queued: number; unresolved: number; suppressed: number;
     binder: ReturnType<ClusterNameBinder['stats']>;
     spine: 'pyannote' | 'csrc'; contested: number; orphans: number; orphansContained: number;
-    hintCuts: number;
+    hintCuts: number; fragmentsNamedBySupport: number;
     tracks: ReturnType<TrackNamer['stats']>;
     sources: Record<string, unknown>;
   } {
@@ -827,7 +841,7 @@ export class ChunkedTranscriber {
       unresolved: this.unresolved.length, suppressed: this.suppressedCount, binder: this.binder.stats(),
       spine: this.authoritative, contested: this.contestedTurns,
       orphans: this.orphanTurns, orphansContained: this.orphanContained,
-      hintCuts: this.hintCuts,
+      hintCuts: this.hintCuts, fragmentsNamedBySupport: this.fragmentsNamedBySupport,
       tracks: this.trackNamer.stats(),
       sources: {
         pyannote: this.pyannoteSource?.health(),
@@ -1008,7 +1022,7 @@ export class ChunkedTranscriber {
     }
     this.turn = {
       clusterId: item.segId, turnId: this.turnCounter++,
-      t0, t1: t0, confirmedUpToMs: coverFrom,
+      t0, t1: t0, confirmedUpToMs: coverFrom, coverFromMs: coverFrom,
       history: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
       lastVoicedWallMs: this.now(), resolvedName: null,
       ...(item.trackId ? { trackId: item.trackId } : {}),
@@ -1172,7 +1186,7 @@ export class ChunkedTranscriber {
     const confirmCount = agreement.confirmCount;
     turn.history = agreement.history;
 
-    const name = this.resolveName(turn);
+    const name = this.resolveName(turn, closing);
     if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
 
     const tail: ChunkSegment[] = mapped.slice(confirmCount).map((s, i) => ({
@@ -1273,7 +1287,7 @@ export class ChunkedTranscriber {
       // yielded-nothing early returns) — the previous guard only rescued a never-confirmed turn,
       // so a confirmed-then-dangling turn silently lost its trailing words. Continue the segment
       // numbering from turn.seq so the promoted ids never collide with turn:${id}:0..seq-1.
-      const name = this.resolveName(turn);
+      const name = this.resolveName(turn, true);
       const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${turn.seq + i}` }));
       turn.seq += promoted.length;
       // publish(confirmed, []) republishes these as completed AND reconciles pending→[], so the
@@ -1311,7 +1325,7 @@ export class ChunkedTranscriber {
     // (provisional), queue it for re-resolve when a later hint arrives.
     if (turn.allConfirmed.length > 0) {
       if (turn.resolvedName) return;
-      const name = this.resolveName(turn);
+      const name = this.resolveName(turn, true);
       if (name === turn.clusterId) {
         this.unresolved.push({ clusterId: turn.clusterId, t0: turn.t0, t1: turn.t1, blockedNames: turn.blockedNames });
         if (this.unresolved.length > MAX_UNRESOLVED) this.unresolved.shift();
@@ -1425,7 +1439,10 @@ export class ChunkedTranscriber {
     return out;
   }
 
-  private resolveName(turn: Turn): string {
+  /** `final` — the turn is closing, so its span is complete: only then may a short fragment the
+   *  binder left unnamed take the name with the most lit time over it. On an open turn that
+   *  fallback would stamp the previous speaker's lingering hint on a turn that has barely begun. */
+  private resolveName(turn: Turn, final = false): string {
     // ── THE TRANSPORT PATH ────────────────────────────────────────────────────────────────────
     // A turn that carries a trackId does not go through ANY of the machinery below. That machinery
     // exists because a pyannote turn has no identity of its own, so a name had to be raced for
@@ -1480,10 +1497,22 @@ export class ChunkedTranscriber {
     // repaints the already-published segments through the same rename path a late hint
     // uses, so nothing is orphaned under the old name.
     if (turn.resolvedName && turn.nameLocked) return turn.resolvedName;
-    const commit = { clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 };
+    // The window a name is looked up over is the audio this turn TRANSCRIBED — from the reclaimed
+    // start to the end of its last STT window — not the segmenter's bare t0..t1: a turn opened and
+    // closed in one instant still reads seconds of speech on both sides of that instant.
+    const commit = { clusterId: turn.clusterId, tStartMs: Math.min(turn.t0, turn.coverFromMs), tEndMs: Math.max(turn.t1, turn.lastSubmitEndMs) };
     // recordVote:false — we only commit a vote once the result survives the
     // short-UI-switch guard below, so a held-provisional bad hint never votes.
-    const r = this.binder.resolve(commit, { recordVote: false });
+    let r = this.binder.resolve(commit, { recordVote: false });
+    if (final && r.source === 'provisional-cluster-id' && this.cb.hintCutsTurns && commit.tEndMs - commit.tStartMs <= SHORT_FRAGMENT_MS) {
+      const support = this.binder.support(commit);
+      const top = support[0];
+      if (top && top.supportMs >= SHORT_FRAGMENT_MIN_SUPPORT_MS) {
+        this.fragmentsNamedBySupport++;
+        this.log(`[ChunkedTranscriber] fragment ${turn.clusterId} ${commit.tStartMs}..${commit.tEndMs} named by support: ${support.map((x) => `${x.name}=${Math.round(x.supportMs)}ms`).join(' ')}`);
+        r = { speakerName: top.name, source: 'window-match', confidence: top.share };
+      }
+    }
     if (r.source === 'provisional-cluster-id') return turn.resolvedName ?? r.speakerName;
     if (this.shouldDeferShortUiSwitch(turn, r.speakerName, r.source)) {
       // A brief isolated tile flip to a NEW name right after a different speaker:

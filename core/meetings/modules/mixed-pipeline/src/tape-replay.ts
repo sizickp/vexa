@@ -434,7 +434,7 @@ async function main(): Promise<void> {
   console.log(`  renames issued: ${renames.length}`);
   if (client) console.log(`  REAL STT: ${sttCalls} call(s), ${sttFailures} failure(s)`);
   const st = tc.stats();
-  console.log(`  spine at end: ${st.spine}; contested turns: ${st.contested}; turns: ${st.turns}; hint cuts: ${st.hintCuts}`);
+  console.log(`  spine at end: ${st.spine}; contested turns: ${st.contested}; turns: ${st.turns}; hint cuts: ${st.hintCuts}; fragments named by support: ${st.fragmentsNamedBySupport}`);
   console.log(`  turn sources: ${JSON.stringify(st.sources)}`);
   console.log(`  tracks: ${st.tracks.named}/${st.tracks.tracks} named — ${JSON.stringify(st.tracks.how)}`);
   console.log(`  track evidence: ${JSON.stringify(st.tracks.evidence)}; roster: ${JSON.stringify(st.tracks.roster)}`);
