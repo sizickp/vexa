@@ -642,6 +642,14 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
       `try { window.VexaBrowserUtils && window.VexaBrowserUtils.installRemoteAudioHook && window.VexaBrowserUtils.installRemoteAudioHook({}); } catch (e) {}`,
     ).catch(() => { /* non-fatal */ });
   }
+  // Telemost's WHO: the media engine's own slot VAD, read off the call frame's signalling socket —
+  // which exists from the first moments of the call, so the tap must be in place at document start,
+  // like the audio hook above. Every frame gets it; only the engine socket is read.
+  if (inv.platform === 'telemost') {
+    await context.addInitScript(
+      `try { window.VexaBrowserUtils && window.VexaBrowserUtils.installTelemostSignalTap && window.VexaBrowserUtils.installTelemostSignalTap(); } catch (e) {}`,
+    ).catch(() => { /* non-fatal: the watcher falls back to the tiles */ });
+  }
 
   // Observability (L4): route the page-side capture's log(m) → container stdout. gmeet-capture
   // calls window.logBot?.(...) ("stream N connected", "capture started with N stream(s)", …); without

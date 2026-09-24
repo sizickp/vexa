@@ -87,6 +87,7 @@ import {
 } from ${JSON.stringify(JITSI)};
 import {
   createTelemostSpeakers,
+  installTelemostSignalTap,
 } from ${JSON.stringify(TELEMOST)};
 import {
   createTeamsSpeakers,
@@ -119,6 +120,7 @@ const VexaBrowserUtils = {
   sendJitsiChatMessage,
   // ── telemost lane (speaking-tile naming hints) ──
   createTelemostSpeakers,    // capture-bridge.ts: w.VexaBrowserUtils.createTelemostSpeakers
+  installTelemostSignalTap,  // capture-bridge.ts init script: the media-engine socket tap (slot VAD)
   // ── teams lane (voice-level "blue-square" outline → speaker hints) ──
   createTeamsSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsSpeakers
   createTeamsCaptions,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsCaptions (live CC → diagnostics)
@@ -170,6 +172,6 @@ console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
 console.log('  - createMixedAudioCapture / installRemoteAudioHook / selectTeamsMixStreams / createCsrcPoll');
 console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
-console.log('  - createTelemostSpeakers');
+console.log('  - createTelemostSpeakers / installTelemostSignalTap');
 console.log('  - createTeamsSpeakers / createTeamsCaptions / createZoomSpeakers / createTrackNameResolver');
 console.log('  - window.performLeaveAction');
