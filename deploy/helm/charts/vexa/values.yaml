@@ -250,6 +250,9 @@ runtime:
     idleTimeoutSec: ""
   # Active-phase remote-audio silence window. Empty uses the bot's 10-minute default.
   aloneSilenceWindowMs: ""
+  # How long the meeting roster must read empty before the bot leaves. Empty uses the bot's
+  # 3-minute default; "0" turns it off. Only platforms that report a roster use it (Telemost).
+  emptyRoomWindowMs: ""
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }

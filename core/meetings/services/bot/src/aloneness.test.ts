@@ -1,12 +1,14 @@
 /** Deterministic proof for silence-based active-phase aloneness. */
 import {
   DEFAULT_ALONE_SILENCE_WINDOW_MS,
+  DEFAULT_EMPTY_ROOM_WINDOW_MS,
   DEFAULT_STREAM_PRESENCE_STALENESS_MS,
   createDeafCaptureGuardAdapter,
   createRemoteAudioActivityTap,
   createSilenceAlonenessSource,
   deafCaptureGuardAdapter,
   resolveAloneSilenceWindowMs,
+  resolveEmptyRoomWindowMs,
   silenceAlonenessAdapter,
 } from './aloneness.js';
 
@@ -432,6 +434,142 @@ function fixture(windowMs = 1_000, extra: {
     DEFAULT_ALONE_SILENCE_WINDOW_MS === 600_000);
   check('invalid env falls back to module default',
     resolveAloneSilenceWindowMs(undefined, { BOT_ALONE_SILENCE_WINDOW_MS: 'nope' }, () => {}) === 600_000);
+}
+
+// ── Empty room: the platform's own roster says nobody is left. Telemost's audio "streams" are SFU
+// slots that stay live after everyone leaves, so the stream-presence bit reads "occupied" forever
+// and the deaf guard holds the bot to the 4h cap (meeting 20: participantSlots=0 from 17:13, still
+// `capture-fault … streams=2` at 17:31). The participant count is the fact that answers it.
+function emptyRoomFixture(emptyRoomWindowMs = 3_000, participantStalenessMs = 30_000) {
+  const clock = new FakeClock();
+  const scheduler = new FakeScheduler();
+  const activity = createRemoteAudioActivityTap({ now: clock.now });
+  const logs: string[] = [];
+  const source = createSilenceAlonenessSource({
+    activity,
+    windowMs: 60_000,
+    emptyRoomWindowMs,
+    participantStalenessMs,
+    now: clock.now,
+    pollMs: 10,
+    setInterval: scheduler.setInterval,
+    clearInterval: scheduler.clearInterval,
+    log: (m) => { logs.push(m); },
+  });
+  /** Advance in page-report steps (the page re-reports every few seconds even when nothing changes). */
+  const run = (ms: number, count: number, step = 1_000): void => {
+    for (let t = 0; t < ms; t += step) {
+      clock.advance(Math.min(step, ms - t));
+      activity.observeParticipantPresence(count);
+      scheduler.tick();
+    }
+  };
+  return { clock, scheduler, activity, source, logs, run };
+}
+
+// (k) Everyone left: an empty room for the whole empty-room window resolves alone — well before the
+// silence window, and through the capture-fault hold (the meeting-20 shape: streams connected, deaf).
+{
+  const f = emptyRoomFixture();
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(2);
+  f.source.onAlone(() => fired++);
+  f.run(5_000, 2);                                   // two people in the call
+  f.run(2_000, 0);                                   // they leave
+  check('an empty room shorter than the window does not fire', fired === 0);
+  f.activity.observeStreamPresence(2);               // SFU slots still "live"
+  f.run(2_000, 0);
+  check('an empty room for the full window resolves alone', fired === 1);
+  check('…before the silence window', f.clock.nowMs < 60_000);
+  check('the empty-room verdict says why',
+    f.logs.some((m) => m.includes('empty-room verdict')), JSON.stringify(f.logs));
+  check('the verdict stops polling', f.scheduler.activeCount === 0);
+}
+
+// (l) Nobody has arrived yet: the rule arms only after the first participant, so a bot sent ahead
+// of the meeting waits under the ordinary silence rule.
+{
+  const f = emptyRoomFixture();
+  let fired = 0;
+  f.activity.ready();
+  f.source.onAlone(() => fired++);
+  f.run(10_000, 0);
+  check('an empty room before anyone joined does not fire the empty-room rule', fired === 0);
+}
+
+// (m) Somebody comes back inside the window: the countdown restarts from the next departure.
+{
+  const f = emptyRoomFixture();
+  let fired = 0;
+  f.activity.ready();
+  f.source.onAlone(() => fired++);
+  f.run(2_000, 1);
+  f.run(2_000, 0);
+  f.run(1_000, 1);                                   // back
+  f.run(2_000, 0);
+  check('a return inside the window resets the countdown', fired === 0);
+  f.run(2_000, 0);
+  check('…and the next full empty window fires', fired === 1);
+}
+
+// (n) The page stopped reporting: a stale "empty" must not evict — only a fresh one may.
+{
+  const f = emptyRoomFixture(3_000, 2_000);
+  let fired = 0;
+  f.activity.ready();
+  f.source.onAlone(() => fired++);
+  f.run(2_000, 1);
+  f.run(1_000, 0);
+  f.clock.advance(5_000); f.scheduler.tick();        // no reports for 5s > 2s staleness
+  check('a stale empty-room report does not fire', fired === 0);
+}
+
+// (o) No window configured: exactly the behaviour before the rule existed.
+{
+  const f = emptyRoomFixture(0);
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(2);
+  f.source.onAlone(() => fired++);
+  f.run(2_000, 1);
+  f.run(30_000, 0);
+  check('with the rule off, an empty room waits for the silence window', fired === 0);
+}
+
+// The tap's participant bookkeeping survives a capture restart and a capture failure — it is a
+// fact about the room, like the stream reports.
+{
+  const clock = new FakeClock();
+  const tap = createRemoteAudioActivityTap({ now: clock.now });
+  tap.ready();
+  tap.observeParticipantPresence(2);
+  clock.advance(100);
+  tap.observeParticipantPresence(0);
+  check('participant presence records the count and when the room emptied',
+    tap.snapshot().participants === 0 && tap.snapshot().participantsObservedAt === 100
+    && tap.snapshot().roomEmptySince === 100 && tap.snapshot().participantsEverSeen === true);
+  clock.advance(100);
+  tap.observeParticipantPresence(0);
+  check('a repeated zero keeps the first empty moment', tap.snapshot().roomEmptySince === 100);
+  tap.unavailable();
+  tap.ready();
+  check('capture restart/failure keeps the room facts',
+    tap.snapshot().roomEmptySince === 100 && tap.snapshot().participantsEverSeen === true);
+  tap.observeParticipantPresence(1);
+  check('a participant clears the empty moment', tap.snapshot().roomEmptySince === undefined);
+  tap.observeParticipantPresence(Number.NaN);
+  check('a nonsense participant report is ignored', tap.snapshot().participants === 1);
+}
+
+// Empty-room window precedence: valid env > 3-minute default; "0" turns the rule off.
+{
+  check('empty-room default is three minutes',
+    resolveEmptyRoomWindowMs({}) === DEFAULT_EMPTY_ROOM_WINDOW_MS && DEFAULT_EMPTY_ROOM_WINDOW_MS === 180_000);
+  check('env override applies', resolveEmptyRoomWindowMs({ BOT_EMPTY_ROOM_WINDOW_MS: '60000' }) === 60_000);
+  check('"0" turns the rule off', resolveEmptyRoomWindowMs({ BOT_EMPTY_ROOM_WINDOW_MS: '0' }) === 0);
+  check('invalid env falls back to the default',
+    resolveEmptyRoomWindowMs({ BOT_EMPTY_ROOM_WINDOW_MS: 'soon' }, () => {}) === 180_000);
 }
 
 console.log(failed

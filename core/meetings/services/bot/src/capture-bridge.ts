@@ -812,6 +812,12 @@ export async function startCaptureBridge(
   await page.exposeFunction('__vexaStreamPresence', (count: number): void => activity?.observeStreamPresence?.(count)).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
   });
+  // The room's roster, where the platform has one (Telemost's engine slotsConfig): the empty-room
+  // rule's oracle. Stream presence cannot answer it there — the SFU keeps its slot tracks live
+  // after everyone leaves.
+  await page.exposeFunction('__vexaParticipantPresence', (count: number): void => activity?.observeParticipantPresence?.(count)).catch((e: Error) => {
+    if (!String(e.message).includes('already registered')) throw e;
+  });
   // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
@@ -1294,6 +1300,7 @@ export async function startCaptureBridge(
             log: (m: string) => w.logBot?.('[TelemostSpeakers] ' + m),
             onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
               w.__vexaSpeakerHint?.(name, tMs, isEnd),
+            onPresence: (participants: number) => w.__vexaParticipantPresence?.(participants),
           });
         }
       }

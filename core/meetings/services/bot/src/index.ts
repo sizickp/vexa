@@ -36,7 +36,7 @@ import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap,
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
-import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
+import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs, resolveEmptyRoomWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
   JoinDriver,
@@ -219,6 +219,8 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   const remoteAudioActivity = createRemoteAudioActivityTap();
   const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
+  // Inert on a lane whose page never reports a participant count (only Telemost does today).
+  const emptyRoomWindowMs = resolveEmptyRoomWindowMs(env);
   // #1192: the guard's one repair attempt, resolved late — the aloneness monitor is built before
   // the browser exists, and the restart needs the live page. Unset until the session launches
   // (and after a launch failure), in which case the guard just holds and keeps checking.
@@ -227,8 +229,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     activity: remoteAudioActivity,
     windowMs: aloneSilenceWindowMs,
     onCaptureFault: () => restartCapture?.(),
+    emptyRoomWindowMs,
   });
-  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs})`);
+  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs}, empty_room_window_ms=${emptyRoomWindowMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
