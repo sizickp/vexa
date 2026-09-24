@@ -13,6 +13,7 @@ import {
   installTelemostSignalTap,
   applyTelemostSignal,
   telemostSignalState,
+  emptyTelemostSignalState,
 } from "./index.js";
 
 let failed = 0;
@@ -109,7 +110,7 @@ async function main() {
     { participantVideoByMid: { participantId: SERGEY, mid: "video_AA" }, vad: speaking.includes(SERGEY), label: "FHD Camera" },
     { participantVideoByMid: { participantId: IGOR, mid: "video_AB" }, vad: speaking.includes(IGOR), label: "" },
   ] } });
-  const st = { names: new Map<string, string>(), speaking: new Set<string>(), messages: 0, slotConfigs: 0 };
+  const st = emptyTelemostSignalState();
   applyTelemostSignal(st, roster);
   applyTelemostSignal(st, slots([IGOR]));
   check("roster names come from the description", st.names.get(IGOR) === "Игорь Охрименко");
@@ -119,6 +120,29 @@ async function main() {
   check("a removed participant drops out of the roster and the speakers", !st.names.has(IGOR) && !st.speaking.has(IGOR));
   applyTelemostSignal(st, "not json");
   check("a non-JSON frame is ignored", st.messages === 3);
+
+  const hello = emptyTelemostSignalState();
+  applyTelemostSignal(hello, JSON.stringify({ serverHello: { conference: { participants: [
+    { id: IGOR, meta: { name: "Игорь Охрименко" } } ] } } }));
+  applyTelemostSignal(hello, JSON.stringify({ slotsConfig: { slots: [
+    { participantAudioOnlyByMid: { participantId: IGOR, mid: "audio_1" }, vad: true } ] } }));
+  check("a roster nested in any message is found by its shape", hello.names.get(IGOR) === "Игорь Охрименко");
+  check("a slot names its participant under any …ByMid key", hello.speaking.has(IGOR) && hello.unnamed.size === 0);
+
+  // A signal that reports a speaker the roster cannot name must not silence the tiles (two windows of
+  // one account, a roster not seen yet): the tiles answer until the signal has named somebody.
+  (globalThis as any).__vexaTelemostSignal = emptyTelemostSignalState();
+  applyTelemostSignal((globalThis as any).__vexaTelemostSignal, JSON.stringify({ slotsConfig: { slots: [
+    { participantVideoByMid: { participantId: "no-roster-id", mid: "v" }, vad: true } ] } }));
+  tiles[0].speaking = true;
+  const ev3: Ev[] = [];
+  const w3 = createTelemostSpeakers({ selfName: "Vexa", onSpeaking: (name, _id, isEnd) => ev3.push({ name, isEnd }), pollMs: 20 });
+  await sleep(50);
+  check("an unproven signal (speaker without a roster name) leaves the tiles in charge",
+    w3.getState().mode === "dom" && ev3.some((e) => e.name === "Alice" && !e.isEnd), JSON.stringify({ state: w3.getState(), ev3 }));
+  w3.destroy();
+  tiles[0].speaking = false;
+  delete (globalThis as any).__vexaTelemostSignal;
 
   // The tap wraps WebSocket and listens to the engine socket only.
   class FakeWS {
