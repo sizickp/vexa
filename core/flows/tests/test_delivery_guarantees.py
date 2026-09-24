@@ -479,3 +479,27 @@ def test_with_no_uid_there_is_nothing_to_read_and_the_baked_prompt_ships(monkeyp
     monkeypatch.setattr(production, "ws_file",
                         lambda uid, path, slug=None: pytest.fail("read _global with no uid"))
     assert production.prompt_for(_prompt_ctx({}), "x.md", "BAKED") == "BAKED"
+
+
+# A door without scaffolds (agent-api with no `/internal/scaffolds`): the note still lands.
+def test_the_drop_still_lands_when_the_door_has_no_scaffolds(monkeypatch, capsys):
+    """`mint_scaffold` answers `ScaffoldsAbsent` (HTTP 404 on the route itself). The organiser's
+    note is dropped WITHOUT a link, everybody else's as before, and the swallow log says why."""
+    from flows_steps.common import ScaffoldsAbsent
+    store = _Store()
+    reg = _drop_rig(monkeypatch, store)
+
+    def no_door(*a, **k):
+        raise ScaffoldsAbsent("no scaffold could be minted for anna (post-meeting/minutes-review): HTTP 404 — Not Found")
+
+    monkeypatch.setattr(production, "mint_scaffold", no_door)
+    prior = dict(PRIOR, email_minutes={"skipped": "mail is not configured"},
+                 email_attendees={"sent": 0, "followup": "off", "to": [], "drops": []})
+    out = reg.steps["drop_to_attendees"](_ctx(dict(REFS), prior))
+
+    assert isinstance(out, Done)
+    assert store.dropped_to() == {"uid-anna", "uid-ben", "uid-cara", "uid-out"}
+    anna = store.files[("uid-anna", [p for _, p in store.writes if "index" not in p][0])]
+    assert "Open the meeting:" not in anna and REPORT.strip() in anna
+    logged = capsys.readouterr()
+    assert "no scaffolds door" in (logged.err + logged.out)

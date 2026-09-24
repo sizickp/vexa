@@ -1481,3 +1481,34 @@ def test_redis_stream_reader_yields_keepalive_ticks(monkeypatch):
     reader = RedisStreamReader("redis://test", block_ms=10, idle_giveup_ms=30)
     out = list(reader.read("u1"))
     assert out == [None, None]                  # ticks until the giveup, then a clean end
+
+
+def test_put_workspace_file_writes_and_commits_as_the_subject(tmp_path):
+    """PUT /api/workspace/file — the door flows' desk drop writes through. The file lands in the
+    caller's primary workspace, a GET reads it back, the commit carries the terminal author, an
+    identical rewrite is not committed again, and a traversal path is refused."""
+    import subprocess
+    from control_plane.workspace_reader import WorkspaceReader
+
+    ws = tmp_path / "u_alice"
+    ws.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(ws), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(ws), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                    "--allow-empty", "-m", "seed"], check=True)
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(tmp_path)),
+    ))
+    h = {"X-User-Id": "u_alice"}
+    body = {"path": "kg/entities/meeting/2026-09-24-demo.md", "content": "# Demo\n\nminutes\n"}
+    r = c.put("/api/workspace/file", headers=h, json=body)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"path": body["path"], "changed": True, "committed": True}
+    assert c.get("/api/workspace/file?path=" + body["path"], headers=h).json()["content"] == body["content"]
+    log = subprocess.run(["git", "-C", str(ws), "log", "-1", "--format=%an <%ae> %s"],
+                         capture_output=True, text=True).stdout.strip()
+    assert log == "vexa-terminal <terminal@vexa.local> write kg/entities/meeting/2026-09-24-demo.md"
+    again = c.put("/api/workspace/file", headers=h, json=body).json()
+    assert again["changed"] is False and again["committed"] is False
+    assert c.put("/api/workspace/file", headers=h, json={"path": "../escape.md", "content": "x"}).status_code == 400
+    assert not (tmp_path / "escape.md").exists()

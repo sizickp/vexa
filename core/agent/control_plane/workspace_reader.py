@@ -116,6 +116,20 @@ class WorkspaceReader:
             raise ValueError("invalid path")
         return f.read_text() if f.exists() and f.is_file() else None
 
+    def write_at(self, base: Path, path: str, content: str) -> bool:
+        """WRITE ``content`` to ``path`` within the ``base`` workspace dir, creating parent dirs.
+        Traversal-guarded exactly as ``read_at``. Returns whether the bytes changed — a write of
+        identical content is a no-op the caller can decline to commit."""
+        ws = self._guard_under_root(base)
+        f = (ws / path).resolve()
+        if ws not in f.parents:
+            raise ValueError("invalid path")
+        if f.exists() and f.is_file() and f.read_text() == content:
+            return False
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+        return True
+
     def _session_id(self, ws: Path, session: str) -> Optional[str]:
         """The claude sessionId for a thread, read from its continuity pointer
         (``.claude/sessions/<session>.session``; the legacy ``main`` falls back to ``.claude/.session``)."""

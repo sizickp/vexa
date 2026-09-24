@@ -49,6 +49,13 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
     Omitted entirely when there is no room, so every other dispatch in this file sends exactly the
     body it has always sent.
 
+    A DOOR WITHOUT A ROOM. agent-api's ``/api/chat`` body is ``extra: forbid``, and a build of it
+    that has no meeting room refuses the four fields with ``422 extra_forbidden`` on each of them —
+    a fact about that door, not about this turn. The turn is then dispatched again WITHOUT the room
+    (the same body every non-room dispatch sends), said out loud on the swallow log so an operator
+    can see the room was not opened. A 422 that names anything else is still this call's own
+    failure and is raised as before.
+
     WHAT IS AND IS NOT "THE TURN IS RUNNING" (P21b). This used to be `except Exception: pass`, with
     the comment above as its whole justification — and the comment is right about ONE exception and
     wrong about every other. A client timeout while the SSE stream is open really does mean the
@@ -82,6 +89,11 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
         # this heuristic is one day wrong.
         swallowed("flows_steps.agent.dispatch_turn", "stream-open timeout, the turn is running", e)
         return base
+    if room and code == 422 and _room_refused(out):
+        swallowed("flows_steps.agent.dispatch_turn",
+                  "agent-api has no meeting room (422 extra_forbidden on every room_* field); "
+                  "the turn is dispatched again without one", None, uid=uid, session=session)
+        return dispatch_turn(uid, session, prompt, room=None)
     if not _ok(code):
         raise StepError(
             f"the agent turn for {uid}/{session} was not dispatched: agent-api answered {code} — "
@@ -90,6 +102,22 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
             # retrying it just delays the reaction without changing the answer.
             retryable=code == 429 or int(code) >= 500)
     return base
+
+
+def _room_refused(out) -> bool:
+    """Did a 422 refuse ONLY the room? pydantic's shape: ``{"detail": [{"type": "extra_forbidden",
+    "loc": ["body", "<field>"], ...}, ...]}``. True when every entry is an ``extra_forbidden`` on a
+    ``room_*`` field — the door has no room. Any other entry, or no parseable detail, and the answer
+    is about this call."""
+    detail = out.get("detail") if isinstance(out, dict) else None
+    if not isinstance(detail, list) or not detail:
+        return False
+    for entry in detail:
+        loc = entry.get("loc") if isinstance(entry, dict) else None
+        field = str(loc[-1]) if isinstance(loc, (list, tuple)) and loc else ""
+        if entry.get("type") != "extra_forbidden" or not field.startswith("room_"):
+            return False
+    return True
 
 
 def _is_timeout(exc: BaseException) -> bool:

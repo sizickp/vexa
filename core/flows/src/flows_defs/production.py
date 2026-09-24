@@ -74,7 +74,7 @@ from flows_steps import common as _common
 # namespace, so one `monkeypatch.setattr(production, …)` sets the world for both (the idiom
 # `flows_steps.common.agent_door` states). Bind it in the other module and half the suite's fakes
 # would be bypassed silently.
-from flows_steps.common import (ensure_platform_user, mint_scaffold, platform_user_id,  # noqa: F401
+from flows_steps.common import (ScaffoldsAbsent, swallowed, ensure_platform_user, mint_scaffold, platform_user_id,  # noqa: F401
                                 scaffolded, setting, ws_file)
 from flows_steps.notify import notify
 # THE ONE SCOPING PREDICATE, imported rather than re-written. `flows_timeline.model` is pure and
@@ -1606,7 +1606,12 @@ def build(reg: Registry, db) -> None:
                          "skipped": "there is no report to drop"})
         uid = ctx.refs["uid"]
         title = ctx.refs.get("title") or "your meeting"
-        organizer = ctx.refs.get("organizer") or "the organiser"
+        # THE ORGANISER IS AN ADDRESS OR NOBODY. A meeting sent from the API or the Terminal carries
+        # no invite and no organiser address; its owner is `uid`, whose desk the note lands on
+        # DIRECTLY. This used to fall through to the literal "the organiser", which
+        # `ensure_platform_user` then minted as an account (user 3, e-mail "the organiser",
+        # 2026-09-24) before failing to write to it.
+        organizer = str(ctx.refs.get("organizer") or "").strip()
         day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
         date_prose = _meeting_date(ctx, uid)
         entity_path = _note_path(ctx, uid, title)      # the one recipe — see `_note_path`
@@ -1614,20 +1619,32 @@ def build(reg: Registry, db) -> None:
         index_path = "kg/entities/meeting/index.md"
         att = ctx.prior.get("email_attendees") or {}
         roster = [str(a).strip().lower() for a in (ctx.refs.get("participants") or [])
-                  if str(a).strip()]
-        if organizer.lower() not in roster:
+                  if "@" in str(a)]
+        if organizer and organizer.lower() not in roster:
             roster = [organizer.lower()] + roster
         # THE ORGANISER IS ONE OF THE ROOM. Their link is the one `email_minutes` already built —
         # no share token, because the meeting is theirs — and when that step was skipped (their
         # `mail_minutes` is off) the same link is composed here rather than dropped: a preference
         # about MAIL is not a preference about what lands on their own desk.
         mid = att.get("meeting_id") or ctx.refs.get("meeting_id")
-        organiser_link = (ctx.prior.get("email_minutes") or {}).get("link") \
-            or mint_scaffold("post-meeting", organizer, opening="minutes-review", meeting_id=mid,
-                             refs=_scaffold_refs(ctx, uid),
-                             provenance={"flow": "post_meeting", "step": "drop_to_attendees",
-                                         "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
-                                         "minted_by": str(uid)})
+        organiser_link = (ctx.prior.get("email_minutes") or {}).get("link") or ""
+        if not organiser_link and organizer:
+            try:
+                organiser_link = mint_scaffold(
+                    "post-meeting", organizer, opening="minutes-review", meeting_id=mid,
+                    refs=_scaffold_refs(ctx, uid),
+                    provenance={"flow": "post_meeting", "step": "drop_to_attendees",
+                                "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
+                                "minted_by": str(uid)})
+            except ScaffoldsAbsent as absent:
+                # THE NOTE IS THE REPORT; THE LINK IS A CONVENIENCE. On a build whose agent-api has
+                # no scaffolds door the report still lands on the organiser's own desk, without the
+                # link, and the log says so — a desk with the minutes and no button beats a desk
+                # with nothing, which is what this step used to leave behind.
+                swallowed("flows_defs.production.drop_to_attendees",
+                          "agent-api has no scaffolds door; the note is dropped without a link",
+                          absent, meeting=str(mid), organizer=organizer)
+                organiser_link = ""
         # THE ROOM IS THE INVITE, NOT THE MAILING LIST. This used to be
         # `[organiser] + att["drops"]`, and `drops` is empty whenever the attendee MAIL was
         # switched off (`attendee_followup`) or every attendee is outside the organiser's domain
@@ -1639,7 +1656,8 @@ def build(reg: Registry, db) -> None:
         # share link, where they were mailed one.
         links = {str((d or {}).get("to") or "").strip().lower(): str((d or {}).get("link") or "")
                  for d in (att.get("drops") or [])}
-        room = [{"to": organizer, "link": organiser_link}]
+        # The owner's own desk is addressed by uid, not by an address: the first entry of the room.
+        room = [{"to": organizer or f"uid:{uid}", "uid": uid if not organizer else "", "link": organiser_link}]
         room += [{"to": a, "link": links.get(a, "")}
                  for a in roster if a != organizer.lower()]
         entity_id = filename[:-3] if filename.endswith(".md") else filename
@@ -1652,7 +1670,7 @@ def build(reg: Registry, db) -> None:
             if not a or a in done:
                 continue
             try:
-                their_uid = ensure_platform_user(a)
+                their_uid = str(d.get("uid") or "") or ensure_platform_user(a)
                 ag.workspace_init(their_uid)
                 _write_if_changed(their_uid, entity_path, _drop_entity(
                     title=title, day=day, entity_id=entity_id, date_prose=date_prose,
