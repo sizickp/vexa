@@ -47,6 +47,15 @@ export function isPerTrackLanePlatform(p: Platform | string): boolean {
   return p === 'zoom';
 }
 
+/** The mixed lane's turn spine per platform. 'auto' lets the RTP transport (CSRC) take over the turn
+ *  edges once it reports contributing sources — right where a server MIXES the audio and labels each
+ *  packet with its sources. Telemost does not mix: live, a whole call yielded one or two stray CSRC
+ *  transitions, enough to arm a spine that carries no speaker structure — every turn went unnamed. Its
+ *  turns stay on the segmenter, named by the hints. */
+export function mixedTurnSourceFor(p: Platform | string): 'auto' | 'pyannote' {
+  return p === 'telemost' ? 'pyannote' : 'auto';
+}
+
 export interface AutomaticLeave {
   waitingRoomTimeout?: number;
   noOneJoinedTimeout?: number;

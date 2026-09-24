@@ -110,6 +110,16 @@ async function main(): Promise<void> {
       JSON.stringify(spy.hints));
   }
 
+  // ── the turn spine per platform: Telemost stays on the segmenter (its stray CSRC must not arm it) ──
+  for (const [platform, expected] of [['telemost', 'pyannote'], ['jitsi', 'auto']] as const) {
+    const spy = mixedSpyFactory();
+    const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
+    await pipe.start();
+    const got = (spy.getCb() as any)?.turnSource;
+    await pipe.stop();
+    check(`${platform}: mixed-lane turn spine = '${expected}'`, got === expected, String(got));
+  }
+
   // ── C1: counters — received per hint; matched/missed via onHintOutcome ──
   console.log('C1 — hint-hop counters');
   {
