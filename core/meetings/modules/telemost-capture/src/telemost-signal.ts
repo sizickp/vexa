@@ -7,17 +7,17 @@
  * observed from its first message. Observing only — messages are never altered or delayed.
  *
  * The engine tells every participant, over that socket:
- *   - `upsertDescription` / `updateDescription` → `description[]` of `{ id, meta: { name } }` —
- *     the participant roster, id → display name;
+ *   - `upsertDescription` / `updateDescription` → `description[]` of `{ id, meta: { name }, sendAudio }`
+ *     — the participant roster, id → display name, and whether that participant's client is
+ *     transmitting audio right now (its own voice gate: on ~1 s before the tile outline, off with it);
  *   - `removeDescription` → participants that left;
- *   - `slotsConfig` → `slots[]` (and `audioSlots[]`), each naming a participant
- *     (`participantVideoByMid` / `participantAudioByMid` → `participantId`) with a server-side
- *     `vad` flag — true while that participant is speaking.
- * The slot flag is the engine's voice-activity verdict AS OF THE LATEST SLOT CONFIGURATION — and the
- * engine re-sends that configuration when its layout changes, not on every change of speaker. With a
- * screen shared it re-lays out as the speaker changes (the flag then tracks speech); in the plain grid it
- * can go minutes between configurations (the flag goes stale). `sharing` says which layout the latest
- * configuration describes. Screen-share and self-view slots carry no speaker and are skipped.
+ *   - `slotsConfig` → `slots[]`, each naming the participant it shows (`participantVideoByMid` /
+ *     `participant` / … → `participantId`) with the server's `vad` flag. The engine re-sends the
+ *     configuration on every change of that flag, in the grid and with a screen shared alike — the
+ *     tiles' speaking outline is drawn from exactly this flag.
+ * A layout can carry no participant slot at all (a share with no room for a strip): then neither the
+ * flag nor an outline can name anyone, and `sendAudio` on the roster channel is the one signal left.
+ * Screen-share and self-view slots carry no speaker and are skipped.
  */
 
 export interface TelemostSignalState {
@@ -25,6 +25,10 @@ export interface TelemostSignalState {
   names: Map<string, string>;
   /** participantIds whose slot currently carries `vad: true`. */
   speaking: Set<string>;
+  /** participantIds whose client is transmitting audio (`sendAudio: true` on the roster channel). */
+  sending: Set<string>;
+  /** Participant slots (a speaker each) in the latest slot configuration. */
+  participantSlots: number;
   /** Engine messages observed, and how many of them were slot configurations. */
   messages: number;
   slotConfigs: number;
@@ -43,19 +47,26 @@ export function telemostSignalState(): TelemostSignalState | null {
 }
 
 export function emptyTelemostSignalState(): TelemostSignalState {
-  return { names: new Map(), speaking: new Set(), messages: 0, slotConfigs: 0, vadSlots: 0, unnamed: new Set(), sharing: false };
+  return { names: new Map(), speaking: new Set(), sending: new Set(), participantSlots: 0, messages: 0, slotConfigs: 0, vadSlots: 0, unnamed: new Set(), sharing: false };
 }
 
-/** Every `{ id, meta: { name } }` roster entry anywhere in a message — the roster rides several verbs
- *  (`upsertDescription`, `updateDescription`, the join handshake), so it is found by its shape. */
-function collectRoster(node: any, out: Map<string, string>, depth = 0): void {
+/** Every `{ id, meta: { name }, sendAudio }` roster entry anywhere in a message — the roster rides
+ *  several verbs (`upsertDescription`, `updateDescription`, the join handshake), so it is found by its
+ *  shape. `sendAudio` is read wherever the entry carries it (top level or under `meta`). */
+function collectRoster(node: any, state: TelemostSignalState, depth = 0): void {
   if (!node || typeof node !== "object" || depth > 6) return;
-  if (Array.isArray(node)) { for (const x of node) collectRoster(x, out, depth + 1); return; }
+  if (Array.isArray(node)) { for (const x of node) collectRoster(x, state, depth + 1); return; }
   const name = typeof node.meta?.name === "string" ? node.meta.name.trim() : "";
-  if (typeof node.id === "string" && name) out.set(node.id, name);
+  if (typeof node.id === "string" && name) {
+    state.names.set(node.id, name);
+    const sending = typeof node.sendAudio === "boolean" ? node.sendAudio
+      : typeof node.meta?.sendAudio === "boolean" ? node.meta.sendAudio : null;
+    if (sending === true) state.sending.add(node.id);
+    else if (sending === false) state.sending.delete(node.id);
+  }
   for (const k of Object.keys(node)) {
     const v = node[k];
-    if (v && typeof v === "object") collectRoster(v, out, depth + 1);
+    if (v && typeof v === "object") collectRoster(v, state, depth + 1);
   }
 }
 
@@ -76,7 +87,8 @@ function removedIds(m: any): string[] {
 }
 
 /** The participant a slot shows, or "" for a slot with no speaker. Screen-share and self-view slots
- *  are not speakers; any other slot names its participant under some `…ByMid`-style key. */
+ *  are not speakers; any other slot names its participant under some object key — `participantVideoByMid`
+ *  with a camera on, plain `participant` without one. */
 function slotParticipant(slot: any): string {
   if (!slot || typeof slot !== "object" || slot.selfView || slot.participantScreenSharingByMid) return "";
   for (const k of Object.keys(slot)) {
@@ -93,21 +105,23 @@ export function applyTelemostSignal(state: TelemostSignalState, raw: unknown): v
   try { m = JSON.parse(raw); } catch { return; }
   if (!m || typeof m !== "object") return;
   state.messages++;
-  collectRoster(m, state.names);
-  for (const id of removedIds(m)) { state.names.delete(id); state.speaking.delete(id); }
+  collectRoster(m, state);
+  for (const id of removedIds(m)) { state.names.delete(id); state.speaking.delete(id); state.sending.delete(id); }
   for (const id of state.unnamed) if (state.names.has(id)) state.unnamed.delete(id);
   const cfg = m.slotsConfig;
   if (cfg && typeof cfg === "object") {
     state.slotConfigs++;
     const speaking = new Set<string>();
     let sharing = false;
+    let participantSlots = 0;
     for (const list of [cfg.slots, cfg.audioSlots, cfg.videoSlots]) {
       if (!Array.isArray(list)) continue;
       for (const slot of list) {
         if (typeof slot?.participantScreenSharingByMid?.participantId === "string") sharing = true;
-        if (slot?.vad !== true) continue;
         const id = slotParticipant(slot);
         if (!id) continue;
+        participantSlots++;
+        if (slot.vad !== true) continue;
         speaking.add(id);
         state.vadSlots++;
         if (!state.names.has(id)) state.unnamed.add(id);
@@ -115,6 +129,7 @@ export function applyTelemostSignal(state: TelemostSignalState, raw: unknown): v
     }
     state.speaking = speaking;
     state.sharing = sharing;
+    state.participantSlots = participantSlots;
   }
 }
 
