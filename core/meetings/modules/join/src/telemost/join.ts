@@ -174,6 +174,28 @@ async function reachPrejoin(page: Page): Promise<"prejoin" | "admitted" | "unkno
   return "unknown";
 }
 
+/**
+ * Put `botName` in the guest name field and make it STICK. The pre-join card fills in its own
+ * default ("Гость") a beat after it renders, so a name typed before that is silently overwritten and
+ * the bot joins as a guest. The name is typed with REAL keyboard events (a React-controlled input only
+ * takes genuine input events), read back once the card has had a moment, and typed again until it
+ * holds. Returns whether it held.
+ */
+async function settleName(page: Page, botName: string, attempts = 5): Promise<boolean> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const field = callFrame(page).locator(telemostNameInputSelector).first();
+    if ((await field.inputValue().catch(() => "")) !== botName) {
+      await field.click({ timeout: 5000 }).catch(() => {});
+      await field.fill("").catch(() => {});
+      await page.keyboard.type(botName, { delay: 30 });
+    }
+    await page.waitForTimeout(700);
+    if ((await field.inputValue().catch(() => "")) === botName) return true;
+    log(`[Telemost] Name did not hold (attempt ${attempt} of ${attempts}) — typing it again`);
+  }
+  return false;
+}
+
 export async function joinTelemostMeeting(
   page: Page,
   meetingUrl: string,
@@ -204,16 +226,8 @@ export async function joinTelemostMeeting(
     return;
   }
 
-  // Fill the display name with REAL keyboard events — a React-controlled input only
-  // enables the join button on genuine input events, not on a synthetic value-set.
-  const nameField = callFrame(page).locator(telemostNameInputSelector).first();
-  const current = await nameField.inputValue().catch(() => "");
-  if (current !== botName) {
-    await nameField.click({ timeout: 5000 }).catch(() => {});
-    await nameField.fill("");
-    await page.keyboard.type(botName, { delay: 30 });
-  }
-  log(`[Telemost] Name entered: "${botName}"`);
+  if (await settleName(page, botName)) log(`[Telemost] Name set: "${botName}"`);
+  else log(`[Telemost] Name did not hold after retries — the call may show the form's default`);
 
   // Receive-only bot: switch the pre-join mic and camera off (each toggle absent when the
   // browser exposes no such device).
@@ -222,7 +236,11 @@ export async function joinTelemostMeeting(
     if (muted) log(`[Telemost] Pre-join toggle off (${muted})`);
   }
 
+  // The toggles re-render the card; a name that was reset by it is put back before joining.
+  await settleName(page, botName, 2);
+
   // The join button enables once the name is non-empty; poll the click briefly.
+  const nameField = callFrame(page).locator(telemostNameInputSelector).first();
   const deadline = Date.now() + 10000;
   let clicked: string | null = null;
   while (!clicked && Date.now() < deadline) {
