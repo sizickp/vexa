@@ -1,6 +1,8 @@
 # telemost-capture/src
 
-Front door [`index.ts`](index.ts). The browser piece:
+Front door [`index.ts`](index.ts). The browser pieces:
+[`telemost-signal.ts`](telemost-signal.ts) (`installTelemostSignalTap` — the media-engine socket tap:
+roster + per-slot server VAD, installed at document start) and
 [`telemost-speakers.ts`](telemost-speakers.ts) (`createTelemostSpeakers` — speaking-tile watcher,
 start/stop per participant with a short release window + a ~2 s heartbeat; OWNS the Telemost tile
 selector arrays).

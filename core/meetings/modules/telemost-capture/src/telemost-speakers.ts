@@ -1,12 +1,16 @@
 /**
  * Yandex Telemost speaking-participant attribution — THE shared implementation.
  *
- * Pure browser code (no Node, no Playwright, no cross-file imports — the bot
- * bundles this file standalone). Consumed by the bot (bundled into
+ * Pure browser code (no Node, no Playwright; its one import is this package's
+ * signal tap — the bot bundles the package into its page bundle). Consumed by the bot (bundled into
  * browser-utils.global.js; the capture bridge instantiates it post-admission).
  *
- * Signal: Telemost exposes no runtime API on the page, so the WHO comes from
- * the participant tiles — the speaking tile's root gains a `rootStroke_*` class
+ * Signal, layered engine-first:
+ *  1. The media engine's own slot VAD (`telemost-signal.ts`: `slotsConfig` over the call's
+ *     signalling socket, names from its roster) — holds in every layout, a shared screen
+ *     included. Used as soon as the tap has seen one slot configuration.
+ *  2. DOM fallback for a frame without the tap: the participant tiles — the speaking tile's
+ *     root gains a `rootStroke_*` class
  * (CSS-module hashed, so matched by prefix) and its `…TextName…` span names the
  * speaker; the bot's own tile is marked `selfView…`. The featured speaker can be
  * drawn twice, so names are de-duplicated. Several people can speak at once, so
@@ -17,6 +21,8 @@
  * ~2s heartbeat the binder's turn model requires: an open hint turn decays after
  * a short grace, so a speaker who KEEPS talking must be re-asserted.
  */
+
+import { telemostSignalState } from "./telemost-signal.js";
 
 export interface TelemostSpeakersOptions {
   /** Bot display name — the bot's own tile is never reported. */
@@ -37,7 +43,7 @@ export interface TelemostSpeakersOptions {
 
 export interface TelemostSpeakers {
   destroy(): void;
-  getState(): { speaking: string[]; changes: number };
+  getState(): { mode: "signal" | "dom" | null; speaking: string[]; changes: number };
 }
 
 // A participant tile (grid / filmstrip / speaker view).
@@ -105,8 +111,22 @@ function isSelfTile(el: Element): boolean {
   try { return !!el.closest(SELF_SELECTOR); } catch { return false; }
 }
 
+/** Everyone speaking right now, and which source said so. */
+function speakingNow(): { names: Set<string>; mode: "signal" | "dom" } {
+  const sig = telemostSignalState();
+  if (sig && sig.slotConfigs > 0) {
+    const names = new Set<string>();
+    for (const id of sig.speaking) {
+      const name = sig.names.get(id);
+      if (name) names.add(name);
+    }
+    return { names, mode: "signal" };
+  }
+  return { names: speakingFromDom(), mode: "dom" };
+}
+
 /** Everyone whose tile currently carries a speaking marker. */
-function speakingNow(): Set<string> {
+function speakingFromDom(): Set<string> {
   const names = new Set<string>();
   try {
     for (const sel of telemostSpeakingSelectors) {
@@ -129,6 +149,7 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
   // name → { lastSeen, lastAssert }
   const active = new Map<string, { lastSeen: number; lastAssert: number }>();
   let changes = 0;
+  let mode: "signal" | "dom" | null = null;
 
   const emit = (name: string, isEnd: boolean) => {
     try { opts.onSpeaking(name, `dom:${name}`, isEnd, Date.now()); } catch { /* never break capture */ }
@@ -136,7 +157,9 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
 
   const tick = () => {
     const now = Date.now();
-    const seen = speakingNow();
+    const read = speakingNow();
+    if (read.mode !== mode) { mode = read.mode; log(`speaker source → ${mode}`); }
+    const seen = read.names;
     // The bot's own speech (TTS) must not name segments after the bot.
     if (self) for (const n of Array.from(seen)) if (n.toLowerCase() === self) seen.delete(n);
 
@@ -175,7 +198,7 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
       active.clear();
     },
     getState() {
-      return { speaking: Array.from(active.keys()), changes };
+      return { mode, speaking: Array.from(active.keys()), changes };
     },
   };
 }
