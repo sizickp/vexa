@@ -87,6 +87,8 @@ INVITE = EventType("invite.received")
 ONB_PERSON = EventType("onboarding.person.needed")
 ONB_GROUP = EventType("onboarding.group.needed")
 COMPLETED = EventType("meeting.completed")
+_PLATFORM_LABEL = {"google_meet": "Google Meet", "teams": "Microsoft Teams", "zoom": "Zoom",
+                   "jitsi": "Jitsi", "telemost": "Telemost"}
 UPCOMING = EventType("meeting.upcoming")
 MAIL_REPLY = EventType("mail.reply")
 # THE THREE ADDED BY PRD DECISION 42.2 — what is waiting is the set of pending REACTIONS flows
@@ -1497,7 +1499,8 @@ def build(reg: Registry, db) -> None:
             "",
             f"# {title}",
             "",
-            f"{date_prose} — {organizer} had Vexa in the room.",
+            f"{date_prose} — {organizer} had Vexa in the room." if organizer
+            else f"{date_prose} — Vexa was in the room.",
             "",
             (report or "").strip(),
             "",
@@ -1605,7 +1608,11 @@ def build(reg: Registry, db) -> None:
             return Done({"dropped": 0, "to": [], "failed": [],
                          "skipped": "there is no report to drop"})
         uid = ctx.refs["uid"]
-        title = ctx.refs.get("title") or "your meeting"
+        # A meeting sent from the API or the Terminal has no invite and no title: name it by what
+        # it is — the platform and the meeting's own id — rather than "your meeting" everywhere.
+        title = (str(ctx.refs.get("title") or "").strip()
+                 or f"{_PLATFORM_LABEL.get(str(ctx.refs.get('platform') or ''), 'Meeting')} "
+                    f"{ctx.refs.get('native') or ctx.refs.get('meeting_id') or ''}".strip())
         # THE ORGANISER IS AN ADDRESS OR NOBODY. A meeting sent from the API or the Terminal carries
         # no invite and no organiser address; its owner is `uid`, whose desk the note lands on
         # DIRECTLY. This used to fall through to the literal "the organiser", which
@@ -1614,7 +1621,9 @@ def build(reg: Registry, db) -> None:
         organizer = str(ctx.refs.get("organizer") or "").strip()
         day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
         date_prose = _meeting_date(ctx, uid)
-        entity_path = _note_path(ctx, uid, title)      # the one recipe — see `_note_path`
+        # THE PATH KEEPS ITS OLD RECIPE — a blank invite title still lands at `<day>-meeting.md`, the
+        # stem the terminal and the tests know; only what the reader SEES names the platform and id.
+        entity_path = _note_path(ctx, uid, ctx.refs.get("title") or "your meeting")
         filename = entity_path.rsplit("/", 1)[-1]
         index_path = "kg/entities/meeting/index.md"
         att = ctx.prior.get("email_attendees") or {}
