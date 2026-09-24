@@ -182,18 +182,39 @@ async function reachPrejoin(page: Page): Promise<"prejoin" | "admitted" | "unkno
  * until it holds. Returns whether it held.
  */
 async function settleName(page: Page, botName: string, attempts = 5): Promise<boolean> {
+  let reported = false;
+  const report = (step: string, e: unknown) => {
+    if (reported) return;
+    reported = true;
+    log(`[Telemost] Name ${step} failed: ${(e as Error)?.message?.split("\n")[0] ?? e}`);
+  };
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const field = callFrame(page).locator(telemostNameInputSelector).first();
+    // The VISIBLE field: the card can hold more than one name input, and the first in document order
+    // is not necessarily the one on screen.
+    const field = callFrame(page).locator(telemostNameInputSelector).filter({ visible: true }).first();
     if ((await field.inputValue().catch(() => "")) !== botName) {
-      // Typed INTO the field, not into whatever holds keyboard focus: a click that an overlay
-      // swallows would otherwise leave the field cleared and the keystrokes lost.
-      await field.fill("", { timeout: 5000 }).catch(() => {});
-      await field.pressSequentially(botName, { delay: 30, timeout: 10000 }).catch(() => {});
+      // Typed INTO the field, not into whatever holds keyboard focus.
+      await field.fill("", { timeout: 5000 }).catch((e) => report("clear", e));
+      await field.pressSequentially(botName, { delay: 30, timeout: 10000 }).catch((e) => report("typing", e));
+    }
+    if ((await field.inputValue().catch(() => "")) !== botName) {
+      // The React way to set a controlled input from outside: the prototype's value setter, then the
+      // input/change events the component listens for.
+      await callFrame(page).evaluate(({ sel, name }) => {
+        const el = (Array.from(document.querySelectorAll(sel)) as HTMLInputElement[])
+          .find((x) => x.offsetParent !== null);
+        if (!el) return false;
+        el.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(el, name);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, { sel: telemostNameInputSelector, name: botName }).catch((e) => report("value-set", e));
     }
     await page.waitForTimeout(700);
     const value = await field.inputValue().catch(() => "");
     if (value === botName) return true;
-    log(`[Telemost] Name did not hold (attempt ${attempt} of ${attempts}; the field reads "${value}") — typing it again`);
+    log(`[Telemost] Name did not hold (attempt ${attempt} of ${attempts}; the field reads "${value}") — setting it again`);
   }
   return false;
 }
