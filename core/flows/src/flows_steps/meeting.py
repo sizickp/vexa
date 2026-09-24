@@ -328,8 +328,14 @@ def room_order(uid: str, meeting_id, participants: list, names: dict,
 
 
 def _phrases(text: str, n: int = 6) -> set:
+    """Six-word windows of a text's words, in every script. The tokenizer used to be
+    ``[a-z0-9']+`` — every Cyrillic, Greek, Arabic, CJK word vanished, a Russian meeting's
+    transcript had ZERO phrases, and the grounding gate refused every report of it as "the agent
+    did not read the meeting" (meeting 23, 2026-09-24: the report quoted the transcript verbatim,
+    twice). Words are runs of letters and digits in any script (apostrophes kept inside a word),
+    lowercased with Unicode rules."""
     import re as _re
-    ws = _re.findall(r"[a-z0-9']+", (text or "").lower())
+    ws = _re.findall(r"[^\W_]+(?:'[^\W_]+)*", (text or "").lower())
     return {" ".join(ws[i:i + n]) for i in range(len(ws) - n + 1)
             if any(len(w) >= 6 for w in ws[i:i + n])}
 

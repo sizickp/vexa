@@ -259,6 +259,14 @@ def ui_link(**params) -> str:
     return f"{ui}/?{q}" if q else f"{ui}/"
 
 
+class ScaffoldsAbsent(StepError):
+    """agent-api answered 404 to the scaffold mint: this build has no scaffolds door. Not retryable —
+    the route will not appear by waiting."""
+
+    def __init__(self, message: str):
+        super().__init__(message, retryable=False)
+
+
 def mint_scaffold(kind: str, recipient: str, *, opening: str,
                   meeting_id=None, refs: Optional[dict] = None,
                   workspaces: Optional[list] = None,
@@ -303,12 +311,18 @@ def mint_scaffold(kind: str, recipient: str, *, opening: str,
     # 5xx is the platform having a moment; a 4xx is a fact about this preset, this kind or this
     # deployment and retrying it only delays the mail without changing the answer. Same split as
     # `mint_transcript_share`, deliberately — one rule for one class of failure.
-    raise StepError(
+    message = (
         f"no scaffold could be minted for {recipient} ({kind}/{opening}"
         + (f", meeting {meeting_id}" if meeting_id else "")
         + f"): HTTP {code} — {str(detail)[:200]}. Not sending: a link that opens onto nothing is "
-          "worse than no mail.",
-        retryable=int(code or 0) >= 500 or int(code or 0) == 429)
+          "worse than no mail.")
+    # A DOOR WITHOUT SCAFFOLDS. 404 on the route itself is a fact about this agent-api build — it
+    # has no `/internal/scaffolds` — not about this preset or this meeting. Raised as its own
+    # kind so a step that can still do its work without a link (a note on the person's own desk)
+    # may choose to, out loud; a mail whose only button would open nothing still must not go.
+    if int(code or 0) == 404:
+        raise ScaffoldsAbsent(message)
+    raise StepError(message, retryable=int(code or 0) >= 500 or int(code or 0) == 429)
 
 
 def db_url() -> str:

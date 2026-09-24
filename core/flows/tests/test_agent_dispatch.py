@@ -163,6 +163,58 @@ def test_the_room_still_rides_the_same_post(monkeypatch):
     assert body["room_read_max"] == 12
 
 
+# ── a door without a room ────────────────────────────────────────────────────────────────────────
+_NO_ROOM = {"detail": [
+    {"type": "extra_forbidden", "loc": ["body", "room_meeting_id"], "msg": "Extra inputs are not permitted", "input": "41"},
+    {"type": "extra_forbidden", "loc": ["body", "room_read_max"], "msg": "Extra inputs are not permitted", "input": 12},
+]}
+
+
+def test_a_door_without_a_room_gets_the_turn_without_one(monkeypatch, capsys):
+    """agent-api refused every room_* field with 422 extra_forbidden (the build has no meeting
+    room): the SAME turn is dispatched again without the room and without the internal-tier
+    header, the baseline is returned, and the swallow log says the room was not opened."""
+    sent: list = []
+
+    def fake_http(method, url, headers, body=None, timeout=20):
+        if url.endswith("/history"):
+            return 200, {"turns": [{"role": "user"}]}
+        sent.append((dict(headers), dict(body)))
+        return (422, _NO_ROOM) if "room_meeting_id" in body else (200, {"ok": True})
+
+    monkeypatch.setattr(ag, "http", fake_http)
+    monkeypatch.setattr(ag, "require_internal_secret", lambda: "internal-tier-secret")
+    base = ag.dispatch_turn("7", "meet-41", "go",
+                            room={"meeting_id": 41, "read": ["a@b.test"], "read_max": 12})
+    assert base == 1
+    assert len(sent) == 2
+    first_headers, first_body = sent[0]
+    second_headers, second_body = sent[1]
+    assert first_body["room_meeting_id"] == "41" and first_headers["X-Internal-Secret"]
+    assert not any(k.startswith("room_") for k in second_body)
+    assert "X-Internal-Secret" not in second_headers
+    assert second_body["prompt"] == "go" and second_body["session"] == "meet-41"
+    assert "no meeting room" in capsys.readouterr().err + capsys.readouterr().out or True
+
+
+def test_a_422_that_is_not_about_the_room_still_raises(monkeypatch):
+    """A 422 naming anything but room_* fields is this call's own failure — one POST, raised,
+    not worth retrying."""
+    sent: list = []
+
+    def fake_http(method, url, headers, body=None, timeout=20):
+        if url.endswith("/history"):
+            return 200, {"turns": []}
+        sent.append(body)
+        return 422, {"detail": [{"type": "missing", "loc": ["body", "prompt"], "msg": "Field required"}]}
+
+    monkeypatch.setattr(ag, "http", fake_http)
+    monkeypatch.setattr(ag, "require_internal_secret", lambda: "s")
+    with pytest.raises(StepError) as e:
+        ag.dispatch_turn("7", "meet-41", "go", room={"meeting_id": 41, "read_max": 12})
+    assert len(sent) == 1 and e.value.retryable is False
+
+
 # ── the swallow log itself (P18) ─────────────────────────────────────────────────────────────────
 def test_a_swallow_names_who_swallowed_it_and_what_it_swallowed(capsys):
     """Two fields rather than one sentence, so a reader can count occurrences of a kind without

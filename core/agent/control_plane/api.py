@@ -285,6 +285,26 @@ class ChatContextBody(BaseModel):
     include: Optional[dict] = None      # {schedule?: bool} — explicit user toggle beats the gate
 
 
+
+class WorkspaceFileWriteBody(BaseModel):
+    """Body for PUT /api/workspace/file — one file, whole content; ``slug`` addresses another mount
+    in the caller's active set exactly as the reads do."""
+    model_config = {"extra": "forbid"}
+    path: str
+    content: str
+    slug: Optional[str] = None
+
+
+def _git_commit_path(ws: Path, path: str, message: str) -> bool:
+    """``git add <path>`` + commit as the terminal's own author; True when a commit was made."""
+    import subprocess
+    author = ["-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local"]
+    subprocess.run(["git", "-C", str(ws), "add", "--", path], check=False, capture_output=True)
+    r = subprocess.run(["git", "-C", str(ws), *author, "commit", "-q", "-m", message, "--", path],
+                       check=False, capture_output=True)
+    return r.returncode == 0
+
+
 class ChatBody(BaseModel):
     model_config = {"extra": "forbid"}
     prompt: str
@@ -1492,6 +1512,23 @@ def create_app(
         if content is None:
             raise HTTPException(status_code=404, detail="not found")
         return {"path": path, "content": content}
+
+    @app.put("/api/workspace/file")
+    def ws_file_write(request: Request, body: WorkspaceFileWriteBody = Body(...)):
+        """WRITE one file into a workspace and COMMIT it — the door a system step (flows'
+        post-meeting desk drop) and a page editor write through, as the subject. Same authorized
+        resolution as the reads (no ``slug`` → the caller's primary; a slug outside the caller's
+        mount set → 403). The commit is stamped ``vexa-terminal <terminal@vexa.local>`` so history
+        stays honest about which hand wrote it; identical content is not committed twice."""
+        try:
+            target = _read_target(request, body.slug)
+            changed = wsr.write_at(target, body.path, body.content)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e) or "invalid path")
+        committed = False
+        if changed and (target / ".git").exists():
+            committed = _git_commit_path(target, body.path, f"write {body.path}")
+        return {"path": body.path, "changed": changed, "committed": committed}
 
     @app.get("/api/workspace/git")
     def ws_git(request: Request, slug: Optional[str] = None):
