@@ -39,6 +39,12 @@ ONNX).
 Each legacy segmentation **turn** is transcribed over the shared engine
 ([`buffer`](../buffer/) LocalAgreement confirm + [`whisper`](../whisper/) stt.v1,
 injected). Names are **derived too**, but cheaply:
+A start-hint for a NEW name can also CUT the open turn (`hintCutsTurns`, on where the hint is the
+server's own voice verdict for a named participant — Telemost's slot VAD): the segmenter finds no edge
+when a speaker takes over without a pause or with a similar voice, and the takeover's first words would
+otherwise commit under the previous name. The cut lands `hintCutLagMs` before the hint; the turn it
+opens is exempt from the short-UI-switch guard, whose premise (a tile flip with no acoustic backing)
+is the opposite of a hint that IS the edge.
 [`ClusterNameBinder`](src/cluster-name-binder.ts) picks the max-overlap **lit hint**
 over the turn span (`recordHint` — Zoom active-speaker DOM, Teams captions /
 voice-outline), each lag-corrected. A turn with no overlapping hint yet publishes

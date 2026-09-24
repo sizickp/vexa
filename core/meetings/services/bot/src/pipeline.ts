@@ -38,7 +38,7 @@ import {
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, isPerTrackLanePlatform, mixedTurnSourceFor, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, mixedTurnSourceFor, hintCutsTurnsFor, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -319,6 +319,7 @@ function createMixedBotPipeline(
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
   selfName?: string,
   turnSource: 'auto' | 'pyannote' = 'auto',
+  hintCutsTurns = false,
 ): BotPipeline {
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
@@ -375,6 +376,10 @@ function createMixedBotPipeline(
         // it hands back — mid-meeting, on the same ring — if it goes silent under continuing speech.
         // A platform that does not mix server-side stays on 'pyannote'.
         turnSource,
+        // The platform's start-hints cut turns where the hint is the server's voice verdict
+        // (hintCutsTurnsFor) — the pyannote spine alone leaves a no-pause takeover in the previous
+        // speaker's turn.
+        hintCutsTurns,
         selfName,
         onObservation: (o: TurnSourceObservation) => {
           // A transcript cannot say which spine produced it, so the switch is DATA beside the
@@ -466,7 +471,7 @@ export function createBotPipeline(
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
       inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
-      inv.botName, mixedTurnSourceFor(inv.platform),
+      inv.botName, mixedTurnSourceFor(inv.platform), hintCutsTurnsFor(inv.platform),
     );
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);

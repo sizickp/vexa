@@ -56,6 +56,14 @@ export function mixedTurnSourceFor(p: Platform | string): 'auto' | 'pyannote' {
   return p === 'telemost' ? 'pyannote' : 'auto';
 }
 
+/** Whether the platform's speaking hint cuts the mixed lane's turns. True where the hint is the
+ *  server's own voice verdict for a named participant (Telemost's slot VAD, Jitsi's dominant
+ *  speaker): a speaker taking over without a pause then gets their own turn instead of the tail of
+ *  the previous speaker's. A tile that lights on noise must not cut. */
+export function hintCutsTurnsFor(p: Platform | string): boolean {
+  return p === 'telemost' || p === 'jitsi';
+}
+
 export interface AutomaticLeave {
   waitingRoomTimeout?: number;
   noOneJoinedTimeout?: number;

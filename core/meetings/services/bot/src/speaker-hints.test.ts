@@ -120,6 +120,16 @@ async function main(): Promise<void> {
     check(`${platform}: mixed-lane turn spine = '${expected}'`, got === expected, String(got));
   }
 
+  // ── hint cuts per platform: where the hint is the server's voice verdict, a new name cuts the turn ──
+  for (const [platform, expected] of [['telemost', true], ['jitsi', true]] as const) {
+    const spy = mixedSpyFactory();
+    const pipe = createBotPipeline(inv(platform), nullSink, { createMixedTranscriber: spy.factory });
+    await pipe.start();
+    const got = (spy.getCb() as any)?.hintCutsTurns;
+    await pipe.stop();
+    check(`${platform}: mixed-lane hintCutsTurns = ${expected}`, got === expected, String(got));
+  }
+
   // ── C1: counters — received per hint; matched/missed via onHintOutcome ──
   console.log('C1 — hint-hop counters');
   {
