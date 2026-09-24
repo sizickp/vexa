@@ -177,21 +177,23 @@ async function reachPrejoin(page: Page): Promise<"prejoin" | "admitted" | "unkno
 /**
  * Put `botName` in the guest name field and make it STICK. The pre-join card fills in its own
  * default ("Гость") a beat after it renders, so a name typed before that is silently overwritten and
- * the bot joins as a guest. The name is typed with REAL keyboard events (a React-controlled input only
- * takes genuine input events), read back once the card has had a moment, and typed again until it
- * holds. Returns whether it held.
+ * the bot joins as a guest. The name is typed key by key into the field itself (a React-controlled
+ * input only takes genuine input events), read back once the card has had a moment, and typed again
+ * until it holds. Returns whether it held.
  */
 async function settleName(page: Page, botName: string, attempts = 5): Promise<boolean> {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const field = callFrame(page).locator(telemostNameInputSelector).first();
     if ((await field.inputValue().catch(() => "")) !== botName) {
-      await field.click({ timeout: 5000 }).catch(() => {});
-      await field.fill("").catch(() => {});
-      await page.keyboard.type(botName, { delay: 30 });
+      // Typed INTO the field, not into whatever holds keyboard focus: a click that an overlay
+      // swallows would otherwise leave the field cleared and the keystrokes lost.
+      await field.fill("", { timeout: 5000 }).catch(() => {});
+      await field.pressSequentially(botName, { delay: 30, timeout: 10000 }).catch(() => {});
     }
     await page.waitForTimeout(700);
-    if ((await field.inputValue().catch(() => "")) === botName) return true;
-    log(`[Telemost] Name did not hold (attempt ${attempt} of ${attempts}) — typing it again`);
+    const value = await field.inputValue().catch(() => "");
+    if (value === botName) return true;
+    log(`[Telemost] Name did not hold (attempt ${attempt} of ${attempts}; the field reads "${value}") — typing it again`);
   }
   return false;
 }

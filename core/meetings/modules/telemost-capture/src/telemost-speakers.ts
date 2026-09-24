@@ -111,16 +111,23 @@ function isSelfTile(el: Element): boolean {
   try { return !!el.closest(SELF_SELECTOR); } catch { return false; }
 }
 
-/** Everyone speaking right now, and which source said so. */
-function speakingNow(): { names: Set<string>; mode: "signal" | "dom" } {
+/** Everyone speaking right now, and which source said so.
+ *
+ *  The engine signal is trusted once it has PROVEN itself — named at least one speaker through the
+ *  roster. Until then, and on any tick where it reports a speaker the roster cannot name, the tiles
+ *  answer: a half-read signal must never silence the source that works. Once proven, a signal that
+ *  reports nobody speaking is silence (the tiles' outline is not a speaker in every layout). */
+function speakingNow(proven: { value: boolean }): { names: Set<string>; mode: "signal" | "dom" } {
   const sig = telemostSignalState();
   if (sig && sig.slotConfigs > 0) {
     const names = new Set<string>();
+    let unnamed = 0;
     for (const id of sig.speaking) {
       const name = sig.names.get(id);
-      if (name) names.add(name);
+      if (name) names.add(name); else unnamed++;
     }
-    return { names, mode: "signal" };
+    if (names.size > 0) proven.value = true;
+    if (proven.value && unnamed === 0) return { names, mode: "signal" };
   }
   return { names: speakingFromDom(), mode: "dom" };
 }
@@ -150,6 +157,9 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
   const active = new Map<string, { lastSeen: number; lastAssert: number }>();
   let changes = 0;
   let mode: "signal" | "dom" | null = null;
+  const proven = { value: false };
+  let lastReport = 0;
+  const REPORT_MS = 30_000;
 
   const emit = (name: string, isEnd: boolean) => {
     try { opts.onSpeaking(name, `dom:${name}`, isEnd, Date.now()); } catch { /* never break capture */ }
@@ -157,7 +167,16 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
 
   const tick = () => {
     const now = Date.now();
-    const read = speakingNow();
+    const read = speakingNow(proven);
+    // A periodic account of the engine signal — the one line that tells, from a bot log alone, why
+    // a meeting was or was not named.
+    if (now - lastReport >= REPORT_MS) {
+      lastReport = now;
+      const sig = telemostSignalState();
+      log(sig
+        ? `signal: messages=${sig.messages} slotConfigs=${sig.slotConfigs} vadSlots=${sig.vadSlots} roster=${sig.names.size} unnamed=${sig.unnamed.size} proven=${proven.value} mode=${read.mode}`
+        : `signal: no tap in this frame · mode=${read.mode}`);
+    }
     if (read.mode !== mode) { mode = read.mode; log(`speaker source → ${mode}`); }
     const seen = read.names;
     // The bot's own speech (TTS) must not name segments after the bot.

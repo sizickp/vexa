@@ -17,5 +17,5 @@ export {
   telemostSelfTileSelectors,
 } from "./telemost-speakers.js";
 export type { TelemostSpeakers, TelemostSpeakersOptions } from "./telemost-speakers.js";
-export { installTelemostSignalTap, telemostSignalState, applyTelemostSignal } from "./telemost-signal.js";
+export { installTelemostSignalTap, telemostSignalState, applyTelemostSignal, emptyTelemostSignalState } from "./telemost-signal.js";
 export type { TelemostSignalState } from "./telemost-signal.js";
