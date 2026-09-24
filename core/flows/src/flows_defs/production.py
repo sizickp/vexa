@@ -76,7 +76,7 @@ from flows_steps import common as _common
 # would be bypassed silently.
 from flows_steps.common import (ensure_platform_user, mint_scaffold, platform_user_id,  # noqa: F401
                                 scaffolded, setting, ws_file)
-from flows_steps.notify import notify
+from flows_steps.notify import available as notify_available, notify
 # THE ONE SCOPING PREDICATE, imported rather than re-written. `flows_timeline.model` is pure and
 # stdlib-only; `concerns` answers "is this fact about this person" over BOTH the uid and the email
 # because the two lineages spell the subject differently, and a second implementation of that in
@@ -369,7 +369,8 @@ def _meeting_stamp(ctx, uid) -> str:
 # move independently. Below the ceiling a failure is retryable (a transient SMTP 421 is the case
 # this exists for); at it the step COMPLETES with the address named in `failed`, because the steps
 # after it — the desk drop that reaches the whole room — must not be held hostage by one bad
-# address in a twenty-person invite.
+# address in a twenty-person invite. `email_minutes` gives up on the organiser's mail at the same
+# ceiling, for the same reason.
 ATTENDEE_MAIL_ATTEMPTS = 3
 
 
@@ -1036,6 +1037,11 @@ def build(reg: Registry, db) -> None:
         Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
         if not setting(ctx.refs["uid"], "mail_minutes"):
             return Done({"skipped": "mail_minutes is off for this person"})
+        # NO TRANSPORT, NO MAIL — and no failure either. A deployment without mail still gets the
+        # report onto the organiser's desk: `drop_to_attendees` composes the organiser's link itself
+        # whenever this step did not.
+        if not notify_available():
+            return Done({"skipped": "mail is not configured on this deployment"})
         # THE ONE ARTEFACT, off the receipt. It used to be re-read out of the organiser's desk
         # (`ws_file(uid, note_path)`), which no longer holds it — the run writes into no desk, so
         # `process_meeting`'s reply IS the report and the receipt is where it lives. The commit sha
@@ -1061,7 +1067,17 @@ def build(reg: Registry, db) -> None:
             provenance={"flow": "post_meeting", "step": "email_minutes",
                         "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                         "minted_by": str(ctx.refs["uid"])})
-        mid = notify(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body, link=link)
+        # A FAILED SEND IS RETRIED to the same ceiling as the attendee mail, then given up on OUT
+        # LOUD: the desk drop after this step must not be held hostage by the organiser's mail server.
+        try:
+            mid = notify(ctx.refs["organizer"], f"Minutes: {ctx.refs['title']}", body, link=link)
+        except Exception as e:  # noqa: BLE001 — any transport failure is one failed send
+            attempt = int(getattr(ctx.reaction, "attempt", 1) or 1)
+            failure = f"{ctx.refs['organizer']}: {type(e).__name__}: {e}"[:240]
+            if attempt < ATTENDEE_MAIL_ATTEMPTS:
+                raise StepError(f"could not mail the minutes (attempt {attempt} of "
+                                f"{ATTENDEE_MAIL_ATTEMPTS}): {failure}", retryable=True) from e
+            return Done({"failed": [failure], "link": link})
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
         return Done({"message_id": mid, "link": link}, provider_ref=mid)
 
@@ -1282,6 +1298,11 @@ def build(reg: Registry, db) -> None:
         if not on or not who:
             return Done({"sent": 0, "followup": "on" if on else "off", "to": [], "drops": [],
                          "skipped": "no inside-domain attendee" if on else "opted out"})
+        # No transport: nobody is mailed and no share capability is minted for a mail that will not
+        # go. The drop still reaches everyone in the room — it reads the invite, not `drops`.
+        if not notify_available():
+            return Done({"sent": 0, "followup": "on", "to": [], "drops": [],
+                         "skipped": "mail is not configured on this deployment"})
         # THE ONE ARTEFACT. `_readable` turns the agent's report into something a person meets in
         # a mail (frontmatter off, wikilinks flattened, relative links absolutised); it is the same
         # string `email_minutes` puts in front of the organiser and the same one every attendee's

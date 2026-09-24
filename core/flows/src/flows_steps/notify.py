@@ -66,6 +66,10 @@ class SmtpNotifier:
         from . import emailx as mx
         return mx.send(to, subject, compose(body, link), in_reply_to=in_reply_to)
 
+    def available(self) -> bool:
+        from . import emailx as mx
+        return mx.mail_configured()
+
 
 _CHANNEL: Optional[NotifyPort] = None
 
@@ -82,6 +86,14 @@ def channel() -> NotifyPort:
             raise ValueError(f"unknown notify channel {want!r} — only 'smtp' is implemented")
         _CHANNEL = SmtpNotifier()
     return _CHANNEL
+
+
+def available() -> bool:
+    """Can the process's channel send at all? A channel that cannot answer is taken to be able to —
+    only a channel that KNOWS it has no transport (SMTP with nothing configured) says no, and the
+    steps that notify then complete without sending rather than fail the reaction around them."""
+    probe = getattr(channel(), "available", None)
+    return True if probe is None else bool(probe())
 
 
 def use(port: Optional[NotifyPort]) -> None:

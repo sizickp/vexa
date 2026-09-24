@@ -56,6 +56,18 @@ def _needs_login() -> bool:
     return not flows_config.get("VEXA_MAIL_SMTP_HOST")
 
 
+def mail_configured() -> bool:
+    """Can this deployment send mail at all? The same resolution `send` performs — a transport that
+    needs a login needs the address and its app password, a login-free one (VEXA_MAIL_SMTP_HOST)
+    the address — asked without opening a socket. A deployment that names none of them sends
+    nothing, and the steps that mail say so instead of failing."""
+    try:
+        creds(login=_needs_login())
+    except flows_config.ConfigError:
+        return False
+    return True
+
+
 def _smtp():
     """Where mail actually goes.
 
