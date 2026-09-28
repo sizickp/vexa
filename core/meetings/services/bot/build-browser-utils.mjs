@@ -83,6 +83,7 @@ import {
 import {
   createJitsiSpeakers,
   createJitsiChat,
+  jitsiRemoteParticipantCount,
   sendJitsiChatMessage,
 } from ${JSON.stringify(JITSI)};
 import {
@@ -118,6 +119,7 @@ const VexaBrowserUtils = {
   createJitsiSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createJitsiSpeakers
   createJitsiChat,           // capture-bridge.ts: w.VexaBrowserUtils.createJitsiChat
   sendJitsiChatMessage,
+  jitsiRemoteParticipantCount, // capture-bridge.ts setupMix: presence = the app's participant list (tracks lie on jitsi)
   // ── telemost lane (speaking-tile naming hints) ──
   createTelemostSpeakers,    // capture-bridge.ts: w.VexaBrowserUtils.createTelemostSpeakers
   installTelemostSignalTap,  // capture-bridge.ts init script: the media-engine socket tap (slot VAD)

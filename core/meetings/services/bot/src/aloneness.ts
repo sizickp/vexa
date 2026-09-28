@@ -35,8 +35,10 @@ export interface RemoteAudioActivitySnapshot {
   lastRemoteFrameAt?: number;
   /** Delivered remote frames since capture became ready (0 with a live stream => deaf, not silent). */
   framesDelivered?: number;
-  /** Remote streams the page reported as CURRENTLY connected and carrying data. `undefined` means
-   *  the lane never reports presence (gmeet captures per channel and has no mix): unknown, not zero. */
+  /** Remote streams the page reported as CURRENTLY connected and carrying data — on jitsi, the
+   *  app's own count of remote participants instead (its tracks outlive the people). `undefined`
+   *  means the lane never reports presence (gmeet captures per channel and has no mix): unknown,
+   *  not zero. */
   streamsConnected?: number;
   /** When the last presence report of ANY count arrived (staleness check). */
   streamsObservedAt?: number;

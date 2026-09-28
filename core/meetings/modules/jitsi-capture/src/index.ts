@@ -7,6 +7,8 @@
  *     primary, DOM fallback) → a mixed-capture.v1 `hint` (kind 'dom-active').
  *   - createJitsiChat: reads conference chat (redux primary — the panel need
  *     not be open; DOM fallback) + sendJitsiChatMessage over the app's own API.
+ *   - jitsiRemoteParticipantCount: who is in the room, from the app's participant
+ *     list — the lane's presence oracle on jitsi (the tracks lie there).
  */
 export {
   createJitsiSpeakers,
@@ -23,3 +25,5 @@ export {
   jitsiChatTextSelectors,
 } from "./jitsi-chat.js";
 export type { JitsiChat, JitsiChatMessage, JitsiChatOptions } from "./jitsi-chat.js";
+export { jitsiRemoteParticipantCount } from "./jitsi-presence.js";
+export type { JitsiParticipantLike } from "./jitsi-presence.js";

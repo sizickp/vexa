@@ -111,6 +111,13 @@ meeting where the capture path failed and the bot genuinely heard nothing. If yo
 zero segments points at capture, not at an empty room. Tracked in
 [`Vexa-ai/vexa#1192`](https://github.com/Vexa-ai/vexa/issues/1192) — open.
 
+The one place a headcount does enter is the guard that keeps the bot from leaving on a *broken*
+capture: while the page still reports people present and no audio arrives for the whole window,
+the bot suspects itself, restarts capture once, and stays. That presence report counts live remote
+audio tracks — except on Jitsi, where the bridge keeps a departed participant's track alive and the
+count would never reach zero; there it is the app's own participant list
+(`features/base/participants`) instead, so a room everyone has left releases the bot after the window.
+
 ### `completed` is not proof of a transcript
 
 A run can reach `completed` with a benign reason and still have produced no segments. The

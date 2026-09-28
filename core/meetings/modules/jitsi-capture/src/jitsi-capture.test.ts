@@ -15,6 +15,7 @@ import {
   jitsiChatMessageSelectors,
   jitsiChatSenderSelectors,
   jitsiChatTextSelectors,
+  jitsiRemoteParticipantCount,
 } from "./index.js";
 
 let failed = 0;
@@ -141,8 +142,31 @@ async function main() {
     check(`${name} exported non-empty`, Array.isArray(arr) && arr.length > 0);
   }
 
+  // ── presence: the app's participant list is the oracle (its tracks outlive the people) ──
+  {
+    const store: any = (globalThis as any).APP.store;
+    const participants = () => store.getState()["features/base/participants"];
+    participants().remote = new Map<string, any>([
+      ["p1", { id: "p1", name: "Alice" }],
+      ["p2", { id: "p2", name: "Bob" }],
+    ]);
+    check("presence counts the remote participants", jitsiRemoteParticipantCount() === 2, String(jitsiRemoteParticipantCount()));
+    participants().remote.set("sv", { id: "sv", name: "YouTube", fakeParticipant: "SharedVideo" });
+    participants().remote.set("p1-ss", { id: "p1-ss", name: "Alice's screen", isVirtualScreenshareParticipant: true });
+    participants().remote.set("rec", { id: "rec", name: "recorder", hidden: true });
+    check("tiles that are not people (fake / virtual screenshare / hidden) do not count", jitsiRemoteParticipantCount() === 2, String(jitsiRemoteParticipantCount()));
+    participants().remote = new Map();
+    check("an empty room is 0 — not null, not the stale track count", jitsiRemoteParticipantCount() === 0, String(jitsiRemoteParticipantCount()));
+    const saved = (globalThis as any).APP;
+    (globalThis as any).APP = undefined;
+    check("no APP global → null (the caller keeps its track count)", jitsiRemoteParticipantCount() === null, String(jitsiRemoteParticipantCount()));
+    (globalThis as any).APP = { store: { getState: () => ({ "features/base/participants": { remote: {} } }) } };
+    check("a store whose remote is not a Map → null, never a guess", jitsiRemoteParticipantCount() === null, String(jitsiRemoteParticipantCount()));
+    (globalThis as any).APP = saved;
+  }
+
   if (failed) { console.error(`\n❌ jitsi-capture (L2): ${failed} check(s) FAILED.`); process.exit(1); }
-  console.log("\n✅ jitsi-capture (L2): speakers + chat drive the fake APP.store correctly; send path + selector surface pinned.");
+  console.log("\n✅ jitsi-capture (L2): speakers + chat + presence drive the fake APP.store correctly; send path + selector surface pinned.");
 }
 
 void main();

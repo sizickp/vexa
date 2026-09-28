@@ -1015,6 +1015,21 @@ export async function startCaptureBridge(
       // sticky over a staleness window, so the DTX gap between talk spurts cannot read as an
       // empty room.
       const reportStreamPresence = (): void => {
+        // Jitsi: the app's participant list, never the tracks. The bridge keeps a departed
+        // participant's receiver live and unmuted, so the track count reads a room everyone has
+        // left as N present streams and the deaf-capture guard holds the bot there for good.
+        // A build that strips the APP global reports null → the track count below still applies.
+        if (isJitsi) {
+          const present = w.VexaBrowserUtils?.jitsiRemoteParticipantCount?.();
+          if (typeof present === 'number') {
+            if (!w.__vexaJitsiPresenceOracle) {
+              w.__vexaJitsiPresenceOracle = true;
+              w.logBot?.('[mixed] presence oracle: jitsi participant list (APP.store), not the remote tracks');
+            }
+            try { w.__vexaStreamPresence?.(present); } catch { /* presence must never break capture */ }
+            return;
+          }
+        }
         let live = 0;
         for (const s of (w.__vexaMixStreamRefs || []) as Array<any>) {
           try {

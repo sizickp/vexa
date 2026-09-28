@@ -14,16 +14,21 @@ and chat — no audio of its own:
 - `createJitsiChat` — reads the conference chat (redux-primary, so the panel need **not** be open; DOM
   fallback otherwise); emits each new message as `{ sender, text }`.
 - `sendJitsiChatMessage` — posts into the conference chat via the app's own `sendTextMessage` API.
+- `jitsiRemoteParticipantCount` — who is in the room, from the app's participant list
+  (`features/base/participants.remote`, minus fake/virtual-screenshare/hidden tiles). The lane's
+  presence oracle on jitsi: the bridge keeps a departed participant's receiver live and unmuted, so
+  the default track count reads an empty room as N present streams and the bot's deaf-capture
+  guard never lets it leave. `null` when the `APP` global is stripped → the bot keeps its track count.
 
 ## Surface
-`createJitsiSpeakers` · `createJitsiChat` · `sendJitsiChatMessage` · the selector arrays
+`createJitsiSpeakers` · `createJitsiChat` · `sendJitsiChatMessage` · `jitsiRemoteParticipantCount` · the selector arrays
 (`jitsiDominantTileSelectors`, `jitsiTileNameSelectors`, `jitsiChatContainerSelectors`,
 `jitsiChatMessageSelectors`, `jitsiChatSenderSelectors`, `jitsiChatTextSelectors`) (+ types
-`JitsiSpeakers`, `JitsiSpeakersOptions`, `JitsiChat`, `JitsiChatMessage`, `JitsiChatOptions`).
+`JitsiSpeakers`, `JitsiSpeakersOptions`, `JitsiChat`, `JitsiChatMessage`, `JitsiChatOptions`, `JitsiParticipantLike`).
 Front door: [`src/index.ts`](src/index.ts).
 
 ## Verify
-`pnpm --filter @vexa/jitsi-capture run build` — `tsc` clean. The L2 unit drives both observers against
-a fake `APP.store` (no browser); the DOM fallbacks and live behavior are validated **live** in a real
+`pnpm --filter @vexa/jitsi-capture run build` — `tsc` clean. The L2 unit drives both observers and the
+presence oracle against a fake `APP.store` (no browser); the DOM fallbacks and live behavior are validated **live** in a real
 Jitsi meeting — consistent with how the lane has always been tested. `tsconfig` adds the `DOM` lib.
 Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.
