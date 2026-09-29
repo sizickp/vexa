@@ -1019,8 +1019,15 @@ export async function startCaptureBridge(
         // participant's receiver live and unmuted, so the track count reads a room everyone has
         // left as N present streams and the deaf-capture guard holds the bot there for good.
         // A build that strips the APP global reports null → the track count below still applies.
+        // Sibling Vexa bots (another deployment sent into the same call) announce themselves in
+        // presence and are left out of the count, so two bots never hold each other in an
+        // emptied room — the marker is set here because the conference is joined by now.
         if (isJitsi) {
-          const present = w.VexaBrowserUtils?.jitsiRemoteParticipantCount?.();
+          if (!w.__vexaJitsiBotMarked && w.VexaBrowserUtils?.jitsiMarkSelfAsVexaBot?.()) {
+            w.__vexaJitsiBotMarked = true;
+            w.logBot?.('[mixed] presence: announced self as a Vexa bot (jitsi_participant_vexa_bot) — sibling bots leave it out of their count');
+          }
+          const present = w.VexaBrowserUtils?.jitsiRemoteParticipantCount?.({ selfName: botName });
           if (typeof present === 'number') {
             if (!w.__vexaJitsiPresenceOracle) {
               w.__vexaJitsiPresenceOracle = true;

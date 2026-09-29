@@ -117,6 +117,10 @@ the bot suspects itself, restarts capture once, and stays. That presence report 
 audio tracks — except on Jitsi, where the bridge keeps a departed participant's track alive and the
 count would never reach zero; there it is the app's own participant list
 (`features/base/participants`) instead, so a room everyone has left releases the bot after the window.
+Other Vexa bots in that list are not people: each bot announces itself in its Jitsi presence
+(`jitsi_participant_vexa_bot`) and the count leaves marked participants out, and participants named
+like a Vexa bot (its own name or a product default) are left out for bots that predate the marker —
+so two deployments sent into one call do not hold each other there.
 
 ### `completed` is not proof of a transcript
 

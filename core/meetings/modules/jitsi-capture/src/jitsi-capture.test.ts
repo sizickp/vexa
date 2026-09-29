@@ -16,6 +16,7 @@ import {
   jitsiChatSenderSelectors,
   jitsiChatTextSelectors,
   jitsiRemoteParticipantCount,
+  jitsiMarkSelfAsVexaBot,
 } from "./index.js";
 
 let failed = 0;
@@ -155,6 +156,38 @@ async function main() {
     participants().remote.set("p1-ss", { id: "p1-ss", name: "Alice's screen", isVirtualScreenshareParticipant: true });
     participants().remote.set("rec", { id: "rec", name: "recorder", hidden: true });
     check("tiles that are not people (fake / virtual screenshare / hidden) do not count", jitsiRemoteParticipantCount() === 2, String(jitsiRemoteParticipantCount()));
+    // sibling Vexa bots are not people: by name for bots that predate the marker, by the marker otherwise
+    participants().remote.set("b-default", { id: "b-default", name: "Vexa" });
+    participants().remote.set("b-self", { id: "b-self", name: " vexa  BOT " });
+    check(
+      "participants named like a Vexa bot (a product default, the caller's own name; case/space-insensitive) do not count",
+      jitsiRemoteParticipantCount({ selfName: "Vexa bot" }) === 2,
+      String(jitsiRemoteParticipantCount({ selfName: "Vexa bot" })),
+    );
+    participants().remote.set("b-custom", { id: "b-custom", name: "Scribe" });
+    check("a bot under a custom name counts until it is the caller's own", jitsiRemoteParticipantCount({ selfName: "Scribe" }) === 2 && jitsiRemoteParticipantCount() === 3, String(jitsiRemoteParticipantCount()));
+    participants().remote.delete("b-custom");
+    const marked: Array<[string, unknown]> = [];
+    (globalThis as any).APP.conference = {
+      _room: {
+        setLocalParticipantProperty: (n: string, v: unknown) => marked.push([n, v]),
+        getParticipantById: (id: string) => ({ getProperty: (n: string) => (id === "zed" && n === "vexa_bot" ? "1" : undefined) }),
+      },
+    };
+    participants().remote.set("zed", { id: "zed", name: "Zed" });
+    check("a participant carrying the vexa_bot presence marker does not count, whatever its name", jitsiRemoteParticipantCount({ selfName: "Vexa bot" }) === 2, String(jitsiRemoteParticipantCount({ selfName: "Vexa bot" })));
+    check(
+      "jitsiMarkSelfAsVexaBot announces the bot through the conference API",
+      jitsiMarkSelfAsVexaBot() === true && marked.length === 1 && marked[0][0] === "vexa_bot" && marked[0][1] === "1",
+      JSON.stringify(marked),
+    );
+    participants().remote = new Map<string, any>([
+      ["b-default", { id: "b-default", name: "Vexa" }],
+      ["zed", { id: "zed", name: "Zed" }],
+    ]);
+    check("a room holding only Vexa bots is 0 — bots do not hold each other", jitsiRemoteParticipantCount({ selfName: "Vexa bot" }) === 0, String(jitsiRemoteParticipantCount({ selfName: "Vexa bot" })));
+    delete (globalThis as any).APP.conference;
+    check("marking without the conference API returns false, never throws", jitsiMarkSelfAsVexaBot() === false);
     participants().remote = new Map();
     check("an empty room is 0 — not null, not the stale track count", jitsiRemoteParticipantCount() === 0, String(jitsiRemoteParticipantCount()));
     const saved = (globalThis as any).APP;

@@ -14,17 +14,24 @@ and chat — no audio of its own:
 - `createJitsiChat` — reads the conference chat (redux-primary, so the panel need **not** be open; DOM
   fallback otherwise); emits each new message as `{ sender, text }`.
 - `sendJitsiChatMessage` — posts into the conference chat via the app's own `sendTextMessage` API.
-- `jitsiRemoteParticipantCount` — who is in the room, from the app's participant list
+- `jitsiRemoteParticipantCount({ selfName })` — who is in the room, from the app's participant list
   (`features/base/participants.remote`, minus fake/virtual-screenshare/hidden tiles). The lane's
   presence oracle on jitsi: the bridge keeps a departed participant's receiver live and unmuted, so
   the default track count reads an empty room as N present streams and the bot's deaf-capture
   guard never lets it leave. `null` when the `APP` global is stripped → the bot keeps its track count.
+  Sibling Vexa bots are left out too — those carrying the `vexa_bot` presence marker, and (for bots
+  that predate it) those named like one: `selfName` or a product default (`KNOWN_VEXA_BOT_NAMES`) —
+  so two deployments sent into one call never hold each other in an emptied room.
+- `jitsiMarkSelfAsVexaBot` — announces the bot in its own presence (`jitsi_participant_vexa_bot`,
+  via `setLocalParticipantProperty`) so sibling bots leave it out whatever it is named.
 
 ## Surface
-`createJitsiSpeakers` · `createJitsiChat` · `sendJitsiChatMessage` · `jitsiRemoteParticipantCount` · the selector arrays
+`createJitsiSpeakers` · `createJitsiChat` · `sendJitsiChatMessage` · `jitsiRemoteParticipantCount` ·
+`jitsiMarkSelfAsVexaBot` · `VEXA_BOT_PRESENCE_PROPERTY` · `KNOWN_VEXA_BOT_NAMES` · the selector arrays
 (`jitsiDominantTileSelectors`, `jitsiTileNameSelectors`, `jitsiChatContainerSelectors`,
 `jitsiChatMessageSelectors`, `jitsiChatSenderSelectors`, `jitsiChatTextSelectors`) (+ types
-`JitsiSpeakers`, `JitsiSpeakersOptions`, `JitsiChat`, `JitsiChatMessage`, `JitsiChatOptions`, `JitsiParticipantLike`).
+`JitsiSpeakers`, `JitsiSpeakersOptions`, `JitsiChat`, `JitsiChatMessage`, `JitsiChatOptions`, `JitsiParticipantLike`,
+`JitsiPresenceOptions`).
 Front door: [`src/index.ts`](src/index.ts).
 
 ## Verify
