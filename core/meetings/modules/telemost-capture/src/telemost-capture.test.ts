@@ -217,6 +217,37 @@ async function main() {
   delete (globalThis as any).__vexaTelemostSignal;
   delete (globalThis as any).WebSocket;
 
+  // Presence: the engine's slotsConfig is the room's roster — it reports the participants left, a
+  // shared screen counts as its presenter (a share layout can carry no participant slot), and
+  // nothing is reported before the engine has said anything (unknown is not empty).
+  const presence: number[] = [];
+  const quiet = () => createTelemostSpeakers({ selfName: "Vexa", onSpeaking: () => {}, onPresence: (n) => presence.push(n), pollMs: 20, presenceReportMs: 100 });
+  const wp0 = quiet();
+  await sleep(50);
+  check("no tap in the frame: presence is not reported", presence.length === 0, JSON.stringify(presence));
+  wp0.destroy();
+  const sig = (globalThis as any).__vexaTelemostSignal = emptyTelemostSignalState();
+  const wp = quiet();
+  await sleep(50);
+  check("no slotsConfig yet: presence is not reported", presence.length === 0, JSON.stringify(presence));
+  applyTelemostSignal(sig, JSON.stringify({ slotsConfig: { slots: [
+    { participant: { participantId: IGOR }, vad: false }, { participantVideoByMid: { participantId: SERGEY, mid: "v" }, vad: false }, { selfView: {}, vad: false } ] } }));
+  await sleep(50);
+  check("two participant slots report two", presence[presence.length - 1] === 2, JSON.stringify(presence));
+  applyTelemostSignal(sig, JSON.stringify({ slotsConfig: { slots: [
+    { participantScreenSharingByMid: { participantId: SERGEY, mid: "video_AC" }, vad: false }, { selfView: {}, vad: false } ] } }));
+  await sleep(50);
+  check("a share with no participant slot still reports its presenter", presence[presence.length - 1] === 1, JSON.stringify(presence));
+  applyTelemostSignal(sig, JSON.stringify({ slotsConfig: { slots: [ { selfView: {}, vad: false } ] } }));
+  await sleep(50);
+  check("only the bot's own view left reports an empty room", presence[presence.length - 1] === 0, JSON.stringify(presence));
+  const before = presence.length;
+  await sleep(250);
+  check("an unchanged count is re-reported (the Node side ages stale reports out)",
+    presence.length > before && presence[presence.length - 1] === 0, JSON.stringify(presence));
+  wp.destroy();
+  delete (globalThis as any).__vexaTelemostSignal;
+
   delete (globalThis as any).document;
   if (failed) { console.log(`\n❌ telemost-capture: ${failed} check(s) FAILED`); process.exit(1); }
   console.log("\n✅ telemost-capture: all green");

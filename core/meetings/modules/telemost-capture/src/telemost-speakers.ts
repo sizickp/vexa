@@ -47,6 +47,12 @@ export interface TelemostSpeakersOptions {
   /** A speaker whose marker drops is held this long before `stop` (ms). Default 800 —
    *  the marker flickers between words; a stop per pause would shred one turn. */
   releaseMs?: number;
+  /** Remote participants in the room by the engine's roster (`slotsConfig`; a shared screen counts
+   *  as its presenter). Called on every change and re-sent every `presenceReportMs` — the receiver
+   *  ages a silent reporter out — and never before the engine's first slotsConfig (unknown ≠ empty). */
+  onPresence?: (participants: number) => void;
+  /** Re-report interval for an unchanged presence count (ms). Default 5000. */
+  presenceReportMs?: number;
 }
 
 export interface TelemostSpeakers {
@@ -169,6 +175,20 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
   const REPORT_MS = 30_000;
   /** When the tiles or the slot VAD last named somebody — `sendAudio` stands in only after a lull. */
   let lastPreciseAt = Date.now();
+  const presenceReportMs = opts.presenceReportMs ?? 5000;
+  let lastPresence: number | null = null;
+  let lastPresenceAt = 0;
+
+  const reportPresence = (now: number) => {
+    if (!opts.onPresence) return;
+    const sig = telemostSignalState();
+    if (!sig || sig.slotConfigs === 0) return;
+    const participants = Math.max(sig.participantSlots, sig.sharing ? 1 : 0);
+    if (participants === lastPresence && now - lastPresenceAt < presenceReportMs) return;
+    lastPresence = participants;
+    lastPresenceAt = now;
+    try { opts.onPresence(participants); } catch { /* never break capture */ }
+  };
 
   const emit = (name: string, isEnd: boolean) => {
     try { opts.onSpeaking(name, `dom:${name}`, isEnd, Date.now()); } catch { /* never break capture */ }
@@ -176,6 +196,7 @@ export function createTelemostSpeakers(opts: TelemostSpeakersOptions): TelemostS
 
   const tick = () => {
     const now = Date.now();
+    reportPresence(now);
     const read = speakingNow();
     if (read.names.size > 0) lastPreciseAt = now;
     const fallback = read.names.size === 0 && read.sending.size > 0 && now - lastPreciseAt >= SENDING_FALLBACK_MS;

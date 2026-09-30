@@ -157,6 +157,13 @@
    "targets": ["compose", "helm", "lite"]
   },
   {
+   "key": "BOT_EMPTY_ROOM_WINDOW_MS",
+   "class": "defaulted",
+   "default": "180000",
+   "description": "how long the platform's participant roster must read empty (after someone was there) before completed(left_alone) — independent of the silence window; 0 turns it off; only lanes that report a roster (Telemost) use it; forwarded to spawned bots when set",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
    "key": "BOT_SPEAKER_MIN_AUDIO_SEC",
    "class": "defaulted",
    "default": "(unset — bot default)",

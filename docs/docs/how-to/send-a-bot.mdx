@@ -251,6 +251,8 @@ An explicit stop still leaves immediately. Removal by the meeting host finishes 
 four-hour active-phase cap remains a backstop. A participant who stays but says nothing for the entire
 silence window will also be left; increase the window when silent attendance is expected. Self-hosters can
 change the deployment fallback with `BOT_ALONE_SILENCE_WINDOW_MS`; an explicit per-meeting value wins.
+On Telemost the bot also reads the meeting's roster: once everyone who was there has left, it leaves
+after `BOT_EMPTY_ROOM_WINDOW_MS` (3 minutes by default) without waiting out the silence window.
 
 ## Next
 

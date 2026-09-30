@@ -26,6 +26,13 @@ export const DEFAULT_STREAM_PRESENCE_STALENESS_MS = 30_000;
 /** How often a persisting capture-fault re-states itself in the log (it is a live incident, not a
  *  one-shot event: a bot that has been deaf for 40 minutes should say so more than once). */
 export const CAPTURE_FAULT_LOG_INTERVAL_MS = 60_000;
+/** How long the platform's participant count must read zero — after someone was there — before the
+ *  bot leaves an empty room. Independent of the silence window: an empty room is a fact, not an
+ *  inference from quiet. `BOT_EMPTY_ROOM_WINDOW_MS` overrides; `0` turns the rule off. */
+export const DEFAULT_EMPTY_ROOM_WINDOW_MS = 3 * 60 * 1000;
+/** How long a page-side participant count stays trustworthy — a page that stopped reporting must
+ *  not be able to evict the bot on its last "empty". */
+export const DEFAULT_PARTICIPANT_PRESENCE_STALENESS_MS = 30_000;
 
 export interface RemoteAudioActivitySnapshot {
   available: boolean;
@@ -46,6 +53,17 @@ export interface RemoteAudioActivitySnapshot {
    *  remote track legitimately flaps `muted` between talk spurts (DTX): a bot must not conclude the
    *  room emptied because it sampled the gap. */
   streamsPresentAt?: number;
+  /** Remote participants the platform's own roster reports in the room (Telemost: the engine's
+   *  `slotsConfig`). `undefined` means the lane has no roster oracle: unknown, not zero. Stream
+   *  presence cannot stand in for it where the media server keeps a room's tracks live after
+   *  everyone leaves (Telemost's SFU slots). */
+  participants?: number;
+  /** When the last participant report of any count arrived (staleness check). */
+  participantsObservedAt?: number;
+  /** Whether any participant has been reported at all — the empty-room rule arms only after one. */
+  participantsEverSeen?: boolean;
+  /** When the room went from occupied to empty; cleared the moment anyone is reported again. */
+  roomEmptySince?: number;
 }
 
 export interface RemoteAudioActivitySource {
@@ -64,6 +82,9 @@ export interface RemoteAudioActivityTap extends RemoteAudioActivitySource {
    *  unknown), and a tap that does not implement it — a test double, an embedder's own — keeps
    *  compiling and keeps today's behaviour. */
   observeStreamPresence?(count: number): void;
+  /** Page-side report: how many remote participants the platform's roster holds RIGHT NOW. OPTIONAL
+   *  like the stream report — only a lane with a roster oracle calls it. */
+  observeParticipantPresence?(count: number): void;
 }
 
 /** `capture-fault` = "these streams are connected and we are hearing NOTHING from them" — the bot is
@@ -115,6 +136,10 @@ export function createRemoteAudioActivityTap(options: {
         streamsConnected: state.streamsConnected,
         streamsObservedAt: state.streamsObservedAt,
         streamsPresentAt: state.streamsPresentAt,
+        participants: state.participants,
+        participantsObservedAt: state.participantsObservedAt,
+        participantsEverSeen: state.participantsEverSeen,
+        roomEmptySince: state.roomEmptySince,
       };
     },
     observeStreamPresence(count: number): void {
@@ -125,6 +150,20 @@ export function createRemoteAudioActivityTap(options: {
         streamsConnected: count,
         streamsObservedAt: at,
         streamsPresentAt: count > 0 ? at : state.streamsPresentAt,
+      };
+    },
+    observeParticipantPresence(count: number): void {
+      if (!Number.isFinite(count) || count < 0) return;
+      const at = now();
+      const everSeen = state.participantsEverSeen === true || count > 0;
+      state = {
+        ...state,
+        participants: count,
+        participantsObservedAt: at,
+        participantsEverSeen: everSeen,
+        // The room empties once — the first zero after someone was there — and a repeated zero
+        // keeps that moment; anyone reported again clears it.
+        roomEmptySince: count > 0 || !everSeen ? undefined : (state.roomEmptySince ?? at),
       };
     },
     snapshot(): RemoteAudioActivitySnapshot {
@@ -222,6 +261,26 @@ export function resolveAloneSilenceWindowMs(
   return DEFAULT_ALONE_SILENCE_WINDOW_MS;
 }
 
+/** The empty-room window: a valid `BOT_EMPTY_ROOM_WINDOW_MS` (`0` = rule off), else three minutes. */
+export function resolveEmptyRoomWindowMs(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (message: string) => void = (message) => console.warn(`[bot] ${message}`),
+): number {
+  const raw = env.BOT_EMPTY_ROOM_WINDOW_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_EMPTY_ROOM_WINDOW_MS;
+  const value = Number(raw);
+  if (Number.isFinite(value) && value >= 0) return value;
+  warn(`BOT_EMPTY_ROOM_WINDOW_MS=${JSON.stringify(raw)} is invalid; using the 3-minute default`);
+  return DEFAULT_EMPTY_ROOM_WINDOW_MS;
+}
+
+/** How long the room has been empty by a FRESH roster report after someone was there, else null. */
+function emptyRoomForMs(snapshot: RemoteAudioActivitySnapshot, now: number, stalenessMs: number): number | null {
+  if (snapshot.participantsEverSeen !== true || snapshot.roomEmptySince === undefined) return null;
+  if (snapshot.participantsObservedAt === undefined || now - snapshot.participantsObservedAt > stalenessMs) return null;
+  return now - snapshot.roomEmptySince;
+}
+
 export function createSilenceAlonenessSource(options: {
   activity: RemoteAudioActivitySource;
   windowMs: number;
@@ -235,6 +294,12 @@ export function createSilenceAlonenessSource(options: {
    *  the one cheap repair attempt (restart the page-side capture). Optional — with no hook the
    *  guard still holds the meeting open and keeps checking. */
   onCaptureFault?: () => void;
+  /** Leave once the platform's roster has read empty this long after someone was there. It decides
+   *  on its own — ahead of the silence window and through a capture-fault hold, because the roster
+   *  is the one signal that knows the room emptied. Unset or 0 = rule off. */
+  emptyRoomWindowMs?: number;
+  /** Staleness bound on the roster report (default DEFAULT_PARTICIPANT_PRESENCE_STALENESS_MS). */
+  participantStalenessMs?: number;
 }): AlonenessSource {
   const now = options.now ?? Date.now;
   const pollMs = options.pollMs ?? DEFAULT_ALONENESS_POLL_MS;
@@ -242,6 +307,8 @@ export function createSilenceAlonenessSource(options: {
   const setIntervalFn = options.setInterval ?? ((callback, ms) => setInterval(callback, ms));
   const clearIntervalFn = options.clearInterval ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
   const log = options.log ?? ((message) => console.log(`[bot] ${message}`));
+  const emptyRoomWindowMs = options.emptyRoomWindowMs ?? 0;
+  const participantStalenessMs = options.participantStalenessMs ?? DEFAULT_PARTICIPANT_PRESENCE_STALENESS_MS;
 
   return {
     onAlone(callback): () => void {
@@ -260,9 +327,18 @@ export function createSilenceAlonenessSource(options: {
         if (handle !== undefined) clearIntervalFn(handle);
       };
       const tick = (): void => {
-        if (stopped || fired || adapters.length === 0) return;
+        if (stopped || fired) return;
         const at = now();
         const snapshot = options.activity.snapshot();
+        const emptyFor = emptyRoomWindowMs > 0 ? emptyRoomForMs(snapshot, at, participantStalenessMs) : null;
+        if (emptyFor !== null && emptyFor >= emptyRoomWindowMs) {
+          fired = true;
+          stop();
+          log(`aloneness: empty-room verdict (participants=0 for ${emptyFor}ms, window_ms=${emptyRoomWindowMs})`);
+          callback();
+          return;
+        }
+        if (adapters.length === 0) return;
         let captureFault = false;
         for (const adapter of adapters) {
           const verdict = adapter.evaluate(snapshot, at, options.windowMs);
