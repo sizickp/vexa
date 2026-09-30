@@ -78,6 +78,21 @@ def test_dispatcher_spawns_isolated_container_with_minted_token():
     assert env["VEXA_UNIT_TRIGGER"] == "message"
     assert '"id": "u_jane"' in env["VEXA_WORKSPACES"] and '"mode": "rw"' in env["VEXA_WORKSPACES"]
     assert env["VEXA_UNIT_OUT_TOPIC"] == f"unit:{wid}:out"
+    assert env["VEXA_GATEWAY_URL"].startswith("http")           # the deployment's gateway, always stamped
+
+
+def test_dispatcher_stamps_the_gateway_agent_api_itself_reaches(monkeypatch):
+    """A turn that reads a meeting through the gateway gets the address agent-api uses — the
+    release-qualified Service on a chart, gateway:8000 on compose — never a hostname guessed in a
+    prompt; a trailing slash is dropped so the kick can append a path."""
+    monkeypatch.setenv("VEXA_GATEWAY_URL", "http://vexa-gateway:8000/")
+    rt = _FakeRuntime()
+    dispatch.Dispatcher(load_settings(), rt, _FakeIdentity()).dispatch(VALID_INV)
+    assert rt.spawned[0][2]["VEXA_GATEWAY_URL"] == "http://vexa-gateway:8000"
+    monkeypatch.delenv("VEXA_GATEWAY_URL")
+    rt = _FakeRuntime()
+    dispatch.Dispatcher(load_settings(), rt, _FakeIdentity()).dispatch(VALID_INV)
+    assert rt.spawned[0][2]["VEXA_GATEWAY_URL"] == "http://gateway:8000"
 
 
 def test_dispatcher_resolve_model_config_tristate():

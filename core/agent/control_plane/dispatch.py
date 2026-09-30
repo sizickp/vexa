@@ -237,6 +237,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
+        # The deployment's gateway, as agent-api itself reaches it (compose: gateway:8000; a chart:
+        # the release-qualified Service). A turn that reads the meeting through the gateway takes
+        # the address from here instead of guessing a hostname that exists in one substrate only.
+        "VEXA_GATEWAY_URL": os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/"),
     }
     # Attribution (D4 / WP-A1.2): the per-mount turn commit is authored by the dispatch PRINCIPAL (the
     # authenticated human whose input drives the turn), committer stays the platform. Until membership/

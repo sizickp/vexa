@@ -8,9 +8,10 @@ API key it reads is a secret: never print it, quote it or write it anywhere.
 
 ```bash
 python3 - <<'PY'
-import glob, json, urllib.request
+import glob, json, os, urllib.request
 key = open(glob.glob("/workspaces/.system/*/vexa-api-key")[0]).read().strip()
-req = urllib.request.Request("http://gateway:8000/transcripts/by-id/{mid}", headers={{"X-API-Key": key}})
+gateway = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
+req = urllib.request.Request(gateway + "/transcripts/by-id/{mid}", headers={{"X-API-Key": key}})
 data = json.load(urllib.request.urlopen(req, timeout=60))
 for s in data.get("segments") or []:
     text = (s.get("text") or "").strip()
