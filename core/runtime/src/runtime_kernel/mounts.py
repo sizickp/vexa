@@ -128,10 +128,12 @@ def k8s_volume_mounts(env: Mapping[str, str], *, pvc_name: str, store_target: st
     The workspace store is ONE RWX PVC (``pvc_name``): one ``volumeMount`` PER MOUNT in the set — same
     PVC, per-mount ``subPath`` + ``readOnly`` — so the Pod's filesystem contains only the dispatch's
     declared workspaces (``subPath`` is native k8s; no version caveat). The whole-store root mount is
-    never emitted. A mount with its OWN host source (``_global``) is SKIPPED with a warning — hostPath
-    volumes were never emitted here (k8s deployments bake ``_global`` differently); an out-of-store
-    mount on its own PVC is a later WP. Pure + env-driven (no kubectl) so the k8s mount plumbing is
-    unit-tested offline.
+    never emitted. A mount with its OWN source (``_global``) rides the same PVC when that source lives
+    INSIDE the store — the k8s shape of the GLOBAL SYSTEM tier is a checkout kept at ``<store>/_global``
+    on the workspace PVC — exposed as a subPath of the SOURCE (read-only for the ``_global`` role). A
+    source OUTSIDE the store is SKIPPED with a warning: hostPath volumes are never emitted here, and an
+    out-of-store mount on its own PVC is a later WP. Pure + env-driven (no kubectl) so the k8s mount
+    plumbing is unit-tested offline.
 
     Returns ``(volumes, volume_mounts)`` ready to merge into a Pod spec and its container."""
     if not pvc_name or not store_target:
@@ -142,11 +144,14 @@ def k8s_volume_mounts(env: Mapping[str, str], *, pvc_name: str, store_target: st
     seen: set[str] = set()
     for m in mount_set(env):
         path = m["path"]
-        if m.get("source") or not _under(path, store_target):
-            logger.warning("k8s: mount %s has its own source / sits outside the store — not exposed "
+        # What the subPath is cut from: the mount's own source when it has one (_global), else its
+        # path. Either way it has to sit inside the store — the one volume this Pod holds.
+        origin = m.get("source") or path
+        if not _under(origin, store_target):
+            logger.warning("k8s: mount %s has a source outside the store — not exposed "
                            "(hostPath is never emitted; give it a PVC in a later WP)", m.get("slug"))
             continue
-        rel = os.path.relpath(os.path.normpath(path), os.path.normpath(store_target))
+        rel = os.path.relpath(os.path.normpath(origin), os.path.normpath(store_target))
         if rel == "." or path in seen:
             continue  # never re-expose the whole store; de-dup targets
         seen.add(path)

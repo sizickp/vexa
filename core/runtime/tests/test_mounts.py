@@ -151,6 +151,25 @@ def test_k8s_strict_emits_per_mount_subpath_readonly():
     assert not any(vm["mountPath"] == "/workspaces" for vm in vmounts)   # whole store never mounted
 
 
+def test_k8s_global_tier_on_the_store_pvc_rides_a_read_only_subpath():
+    """The k8s shape of `_global`: a checkout kept INSIDE the store (`<store>/_global`, the path
+    agent-api's GLOBAL_SYSTEM_WORKSPACE_PATH names) is exposed as a read-only subPath of its SOURCE.
+    A source outside the store still has no PVC here and is skipped, never turned into a hostPath."""
+    mounts = [
+        {"slug": "seed", "path": "/workspaces/u1", "role": "private", "write": True, "primary": True},
+        {"slug": "_global", "source": "/workspaces/_global", "path": "/workspaces/_global",
+         "role": "global", "write": False},
+        {"slug": "_global", "source": "/srv/vexa-global", "path": "/workspaces/_global-host",
+         "role": "global", "write": False},
+    ]
+    _, vmounts = k8s_volume_mounts(_env(mounts), pvc_name="vexa-agent-workspaces",
+                                   store_target="/workspaces")
+    assert vmounts == [
+        {"name": "workspace-store", "mountPath": "/workspaces/u1", "subPath": "u1", "readOnly": False},
+        {"name": "workspace-store", "mountPath": "/workspaces/_global", "subPath": "_global", "readOnly": True},
+    ]
+
+
 def test_k8s_pod_overrides_carry_the_per_mount_spec():
     """The Pod spec the worker gets: per-mount subPath volumeMounts against the ONE store PVC."""
     ov = pod_overrides(_env(source="vexa-agent-workspaces"), container_name="vexa-worker-u1")
