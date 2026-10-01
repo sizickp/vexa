@@ -646,6 +646,13 @@ def create_app(
     async def mint_transcript_share_by_id(meeting_id: int, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
 
+    # Rebuild a finished meeting's transcript from its whole recording — by ROW id, like the two
+    # by-id verbs above. meeting-api owns the run and answers its state on every call, so the one
+    # verb is also its own poll; the edge only forwards.
+    @app.post("/meetings/{meeting_id}/transcribe")
+    async def retranscribe_meeting(meeting_id: int, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/transcribe"), request)
+
     @app.post("/meetings/{platform}/{native_meeting_id}/share")
     async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)

@@ -990,6 +990,104 @@ class SqlAlchemyTranscriptStore:
                 )
             await db.commit()
 
+    async def retranscription_source(self, user_id, meeting_id) -> Optional[dict]:
+        """What a re-transcription run reads, owner-scoped (``retranscribe.ports.TranscriptRewriter``):
+        the meeting's status and start, its recordings, the persisted live rows and the stored run
+        state. ``None`` when the caller owns no such meeting."""
+        import calendar
+
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == int(meeting_id), Meeting.user_id == int(user_id))
+            )).scalars().first()
+            if meeting is None:
+                return None
+            rows = (await db.execute(
+                select(Transcription).where(Transcription.meeting_id == meeting.id)
+                .order_by(Transcription.start_time)
+            )).scalars().all()
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            origin = meeting.start_time or meeting.created_at
+            return {
+                "meeting_id": meeting.id,
+                "status": meeting.status,
+                # the columns are naive UTC — read them as UTC, not through the process timezone
+                "start_epoch": (calendar.timegm(origin.timetuple()) + origin.microsecond / 1e6)
+                               if origin else 0.0,
+                "recordings": list(data.get("recordings") or []),
+                "live": [{"start": r.start_time, "end": r.end_time, "speaker": r.speaker,
+                          "text": r.text, "language": r.language} for r in rows],
+                "state": data.get("retranscription"),
+            }
+
+    async def replace_transcript(self, meeting_id, rows) -> int:
+        """Replace every ``transcriptions`` row of the meeting with ``rows`` in ONE transaction, and
+        drop the meeting's un-flushed live hash first so a late db-writer tick cannot lay a live
+        segment back over the rewrite."""
+        from datetime import datetime as _dt
+
+        from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
+
+        mid = int(meeting_id)
+        if self._redis is not None:
+            from .db_writer import ACTIVE_MEETINGS_KEY, segments_hash_key
+            try:
+                await self._redis.delete(segments_hash_key(mid))
+                await self._redis.srem(ACTIVE_MEETINGS_KEY, str(mid))
+            except Exception:  # noqa: BLE001 — best-effort; a finished meeting's hash is normally flushed
+                pass
+        async with self._session_factory() as db:
+            await db.execute(sql_text("DELETE FROM transcriptions WHERE meeting_id = :mid"), {"mid": mid})
+            for row in rows:
+                await db.execute(
+                    sql_text("""
+                        INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
+                        VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
+                    """),
+                    {"mid": mid, "start": float(row["start"]), "end": float(row["end"]),
+                     "text": row.get("text") or "", "speaker": row.get("speaker"),
+                     "lang": row.get("language"), "uid": row.get("session_uid"),
+                     "segid": row.get("segment_id"), "created": _dt.utcnow()},
+                )
+            await db.commit()
+        return len(rows)
+
+    async def decide_retranscription(self, meeting_id, decide) -> dict:
+        """Read ``meeting.data['retranscription']`` and write what ``decide(state)`` returns, under
+        the row lock — one atomic step, so two processes deciding together are decided in turn.
+        ``decide`` returning ``None`` writes nothing; the state as it stands afterwards is returned."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == int(meeting_id)).with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return decide({}) or {}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            current = data.get("retranscription")
+            state = dict(current) if isinstance(current, dict) else {}
+            decided = decide(dict(state))
+            if decided is None:
+                return state
+            data["retranscription"] = decided
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return decided
+
+    async def stamp_retranscription(self, meeting_id, patch) -> dict:
+        """Merge ``patch`` into the stored run state and return the merged state — the run's
+        status, reason and counts, readable by the next call."""
+        return await self.decide_retranscription(meeting_id, lambda state: {**state, **patch})
+
     async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
         """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
         — the last ``proc:meeting:{id}`` stream entry already durable; the db-writer resumes after it."""

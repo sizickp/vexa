@@ -105,6 +105,13 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/meetings/{meeting_id}/transcribe",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
       "method": "DELETE",
       "path": "/meetings/{platform}/{native_meeting_id}",
       "scopes": [

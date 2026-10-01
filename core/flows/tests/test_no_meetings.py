@@ -51,7 +51,7 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 #: with the queue's onboarding row and this list was not updated with it, which is a list that
 #: stopped being read rather than a step that stopped declaring.
 MEETINGS_STEPS_CORE = {
-    "await_start", "dispatch_bot", "run_meeting", "first_meeting",
+    "await_start", "dispatch_bot", "run_meeting", "first_meeting", "retranscribe",
     "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees",
 }
 #: `prepare_meeting` needs BOTH domains and lives in the optional `flows_defs/production_agent.py`,

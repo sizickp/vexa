@@ -199,7 +199,7 @@ native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
 | `GET /recordings/{recording_id}/media/{media_file_id}/download` | **Aliased** to the `.../raw` master byte stream (Range-capable). |
 | `GET /bots/{platform}/{native_meeting_id}/chat` | **Restored, empty** — the owner boundary is real; the message list is always empty (0.12 does not persist in-meeting chat server-side; chat flows live over the WS `va:…:chat` channel). |
 | `POST /bots/{platform}/{native_meeting_id}/chat` | **Not implemented** — no bot-command (send) backend in the 0.12 core. |
-| `POST /meetings/{meeting_id}/transcribe` | **Not implemented** — no on-demand re-transcribe backend in the 0.12 core. |
+| `POST /meetings/{meeting_id}/transcribe` | **Yes** — rebuilds a completed meeting's transcript from its whole recording and replaces the live rows. The first call starts the run and answers `{"status": "running"}`; later calls answer its state (`completed` / `skipped` / `failed`, with a `reason` and counts). See [Recordings](/how-to/recordings#re-transcribe-from-the-recording). |
 
 <Note>
 **What the seal enforces now.** Because the file hash pins the *document* and not the *running

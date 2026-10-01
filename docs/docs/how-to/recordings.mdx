@@ -66,6 +66,36 @@ curl -I -H "X-API-Key: $API_KEY" -H "Range: bytes=0-1023" \
 Recordings live in the bucket configured by `MINIO_*` ([Configuration](/configuration#database-storage)).
 On a self-host that's infrastructure you control; a no-egress deployment keeps recordings entirely in-VPC.
 
+## Re-transcribe from the recording
+
+The live transcript is built from short audio windows, each sent to the speech-to-text backend
+without its neighbours — words get lost and doubled at the seams. Once the meeting is `completed`,
+the whole recording can go through the same backend in one pass, and the result **replaces** the
+live transcript:
+
+```bash
+curl -X POST -H "X-API-Key: $VEXA_API_KEY" "$VEXA_API_URL/meetings/$MEETING_ID/transcribe"
+# {"meeting_id": 42, "status": "running", "started_at": "…"}
+```
+
+The verb is its own poll: the first call starts the run, every later call answers its state and
+starts nothing. A run ends in one of three states, each with a `reason` and counts
+(`segments`, `words`, `live_words`, `stt_seconds`):
+
+| `status` | Meaning |
+|---|---|
+| `completed` | The transcript was replaced. Speaker names come from the live transcript — the recording is one mixed track. |
+| `skipped` | Nothing was replaced: no audio recording, no transcription backend configured, no speech in the recording, or the rebuilt transcript held fewer than 60% of the live transcript's words (a recording with gaps can only lose speech). |
+| `failed` | The backend or storage refused; the live transcript stays. |
+
+Send `{"force": true}` to run it again. A meeting that is not `completed` answers `409`. The key
+needs the `tx` scope.
+
+**It runs by itself after every meeting.** The stock `post_meeting` flow starts with the
+[`retranscribe`](/flows/vocabulary) step, so the report and the minutes are written from the rebuilt
+transcript. A meeting with nothing to rebuild from goes straight to the report on the live
+transcript — re-transcription never holds the minutes back for longer than 45 minutes.
+
 ## Delete a recording
 
 ```bash

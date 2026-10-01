@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 from . import bot_spawn as _bot_spawn
 from . import events as _flows_events
 from . import recordings as _recordings
+from . import retranscribe as _retranscribe
 from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
 from .lifecycle.machine import LifecycleSink, MeetingStore
@@ -295,6 +296,10 @@ def create_app(
     if recording_repo is None:
         recording_repo = _recordings_fakes().InMemoryRecordingRepo()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
+
+    # --- retranscribe: POST /meetings/{id}/transcribe — the whole recording through the STT backend,
+    #     the live transcript's rows replaced (api.v1) ---
+    app.include_router(_retranscribe.build_router(transcript_store, recording_repo, storage))
 
     # --- webhooks: GET /webhooks/deliveries — the per-user delivery history the dashboard reads (#841) ---
     app.include_router(_build_webhooks_router(delivery_ledger))

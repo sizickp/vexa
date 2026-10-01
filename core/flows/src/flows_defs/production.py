@@ -801,6 +801,49 @@ def build(reg: Registry, db) -> None:
         unreachable from anywhere. Result: {ready} — the shape the old receipts carry."""
         return Done({"ready": True, "retired": "decision 29 — minutes are never gated on setup"})
 
+    # REACHES MEETINGS — asks the owning service to rebuild the transcript from the recording and
+    # waits for its answer (`mt.meeting_row`, `mt.retranscribe`).
+    @reg.step(needs=("meetings",))
+    def retranscribe(ctx: StepCtx):
+        """THE REPORT IS WRITTEN FROM THE TRANSCRIPT REBUILT OUT OF THE WHOLE RECORDING.
+
+        The live transcript is cut from short windows the speech-to-text backend hears one at a
+        time, without their neighbours: words go missing and double at the seams, and a report
+        written from it inherits every one of those holes. Once the meeting is over the recording
+        exists, and the meetings domain can put the whole of it through the same backend in one
+        pass and replace its own rows. This step asks for that and waits, so `process_meeting`
+        reads the rebuilt transcript — the same `GET /transcripts/by-id` it always read.
+
+        IT ASKS; IT DOES NOT DO. Flows holds no audio and calls no speech-to-text backend. The
+        verb is the owning service's, it is its own poll (the first call starts the run, later
+        calls report it), and its answer is the receipt.
+
+        NEVER A REASON TO LOSE THE REPORT. A meeting with no recording, a deployment with no
+        backend, a recording with gaps the service refuses to prefer over the live rows, a run that
+        failed, a service that predates the verb: each ends this step `Done` with the reason on the
+        receipt, and the report is written from the transcript as it stands. Only *still running*
+        waits, and not forever — after `patience` the step stops asking.
+
+        Reads: refs.{uid,meeting_id,native} · Reaches: meetings (re-transcription)
+        Result: {status, reason, segments, words, live_words}."""
+        patience = 45 * 60
+        uid = ctx.refs["uid"]
+        row = mt.meeting_row(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+        row_id = (row or {}).get("id") if isinstance(row, dict) else None
+        if row_id is None:
+            return Done({"status": "skipped", "reason": "the meeting has no row to re-transcribe"})
+        waited = ctx.clock_now - ctx.scratch.setdefault("t0", ctx.clock_now)
+        state = mt.retranscribe(uid, row_id)
+        if state is None or state.get("status") == "running":
+            if waited > patience:
+                return Done({"status": "abandoned",
+                             "reason": f"no final answer after {int(waited)}s — the report is "
+                                       "written from the transcript as it stands"})
+            return Wait(seconds=20)
+        return Done({"status": state.get("status"), "reason": state.get("reason"),
+                     "segments": state.get("segments"), "words": state.get("words"),
+                     "live_words": state.get("live_words")})
+
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
     # the engine answers `not_present` for this step without entering it when a deployment
     # does not run agents, so the absent door is never knocked on.
@@ -1936,12 +1979,14 @@ def build(reg: Registry, db) -> None:
     # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
     # steps stay in the vocabulary; a flow is retired by not registering it, and `flows_submit`
     # would refuse to resurrect one anyway without a human writing the row.
-    # VERSION 4 — `require_workspace` removed (decision 29). Four, not two, because versions 2 and
-    # 3 were authored through the API against this same flow name and `match()` takes the newest
-    # number wherever it came from; a code change that does not clear the highest DB version is
-    # inert, which is exactly the defect `Registry.shadowing_versions` now warns about.
-    reg.flow(name="post_meeting", version=4, on=COMPLETED,
-             steps=[s["process_meeting"], s["email_minutes"],
+    # VERSION 5 — `retranscribe` runs FIRST: the report is written from the transcript rebuilt out
+    # of the whole recording, not from the live windows. The number is one above the highest this
+    # flow name has carried, and that is the rule rather than a coincidence: `match()` takes the
+    # newest version wherever it came from (versions were also authored through the API), so a
+    # code change that does not clear the highest DB version is inert — the defect
+    # `Registry.shadowing_versions` warns about.
+    reg.flow(name="post_meeting", version=5, on=COMPLETED,
+             steps=[s["retranscribe"], s["process_meeting"], s["email_minutes"],
                     s["email_attendees"], s["drop_to_attendees"]])
     # THE QUEUE FLOW THIS FILE KEEPS (PRD decision 42.2). It is one step and produces no effect:
     # what it produces is a REACTION ROW in a state a person can be told about — pending while a

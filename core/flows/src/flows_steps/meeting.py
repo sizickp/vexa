@@ -208,6 +208,34 @@ def transcript_segment_count(uid: str, meeting_id) -> int | None:
     return len(body.get("segments") or [])
 
 
+def retranscribe(uid: str, meeting_id) -> dict | None:
+    """ASK THE MEETINGS DOMAIN TO REBUILD THIS MEETING'S TRANSCRIPT from its whole recording, or to
+    say how that is going. `POST /meetings/{id}/transcribe` is its own poll: the first call starts
+    the run and answers `running`; every later call answers the current state and starts nothing.
+
+    The live transcript is cut from short windows the speech-to-text backend sees one at a time;
+    the recording gives it the whole meeting. Flows neither holds the audio nor calls the backend —
+    the owning service does both and replaces its own rows. This is the request and the answer.
+
+    THE THREE ANSWERS ARE THREE. The run's state, `{status, reason, …}` with `status` one of
+    `running` / `completed` / `skipped` / `failed`. `{status: "refused", reason}` when the service
+    answered and would not run it — the meeting is not completed, or the deployment predates the
+    verb. **None** when the door could not be reached at all: a caller that waits must be able to
+    tell *still working* from *nobody answered*."""
+    try:
+        st, body = http("POST", f"{meetings_door()}/meetings/{meeting_id}/transcribe",
+                        {"X-API-Key": user_api_key(str(uid))}, {})
+    except StepError:
+        return None
+    try:
+        answered = 200 <= int(st) < 300
+    except (TypeError, ValueError):
+        answered = False
+    if not answered or not isinstance(body, dict) or not body.get("status"):
+        return {"status": "refused", "reason": f"HTTP {st} — {_http_detail(body)}"}
+    return body
+
+
 def _tokens(text: str) -> list:
     """A name as comparable words: lowercase, split on anything that is not a letter or a digit,
     bare numbers dropped. `Anna-Maria Smith` and `anna maria smith` become the same three."""

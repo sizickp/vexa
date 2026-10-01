@@ -808,6 +808,46 @@ class InMemoryTranscriptStore:
             if sid:
                 m["segments"][sid] = dict(seg)
 
+    async def retranscription_source(self, user_id, meeting_id) -> Optional[dict]:
+        """Mirrors the adapter: owner-scoped, the durable segments as the live transcript."""
+        from datetime import datetime
+
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        try:
+            start_epoch = datetime.fromisoformat(str(m.get("start_time")).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            start_epoch = 0.0
+        segments = sorted(m["segments"].values(), key=lambda s: float(s.get("start") or 0.0))
+        return {
+            "meeting_id": meeting_id,
+            "status": m["status"],
+            "start_epoch": start_epoch,
+            "recordings": list(m["data"].get("recordings") or []),
+            "live": [{"start": s.get("start"), "end": s.get("end"), "speaker": s.get("speaker"),
+                      "text": s.get("text"), "language": s.get("language")} for s in segments],
+            "state": m["data"].get("retranscription"),
+        }
+
+    async def replace_transcript(self, meeting_id, rows) -> int:
+        """The dict stands in for ``transcriptions``: every durable segment replaced at once."""
+        m = self._row_or_placeholder(meeting_id)
+        m["segments"] = {r["segment_id"]: dict(r) for r in rows}
+        return len(rows)
+
+    async def decide_retranscription(self, meeting_id, decide) -> dict:
+        m = self._row_or_placeholder(meeting_id)
+        state = dict(m["data"].get("retranscription") or {})
+        decided = decide(dict(state))
+        if decided is None:
+            return state
+        m["data"]["retranscription"] = decided
+        return decided
+
+    async def stamp_retranscription(self, meeting_id, patch) -> dict:
+        return await self.decide_retranscription(meeting_id, lambda state: {**state, **patch})
+
     async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
         from .adapters import _find_processed_view
 

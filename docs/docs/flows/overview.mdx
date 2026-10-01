@@ -58,7 +58,7 @@ Learned live, enforced by gates and a runtime watchdog:
 | `invite_intake` | invite arrives at the Vexa mailbox | provision the organizer · **accept the invitation in their calendar** (iMIP) · acknowledge by email · spawn onboarding if needed · bot at start−2 min · emit completion |
 | `onboard_person` | no personal workspace | a **real agent conversation over email** — one question per mail, until the agent itself accepts (`.scaffolded`) |
 | `onboard_group` | `#group:name` in the invite | same conversation for the group workspace |
-| `post_meeting` | meeting completed | **queued behind workspace readiness** with nudges — late, never lost — then the agent writes the note and the minutes arrive **verbatim in the email body** |
+| `post_meeting` | meeting completed | the transcript is **rebuilt from the whole recording** first, then the agent writes the note from it and the minutes arrive **verbatim in the email body** |
 | `email_chat` | any threaded reply | the standing conversation: feedback processed, workspace updated, answer mailed back |
 
 Email is the entire product surface for these flows: every artifact — confirmation, onboarding

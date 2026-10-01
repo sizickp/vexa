@@ -113,6 +113,7 @@ edges:
   remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
+  meeting-api -call-> transcription  # a finished meeting's recording master -> first-party STT in one pass (POST /meetings/{id}/transcribe), the same TRANSCRIPTION_SERVICE_URL a bot spawn uses
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status
