@@ -84,7 +84,7 @@ def test_a_meeting_with_no_row_is_not_asked_about(step, monkeypatch):
 def test_the_report_is_written_after_the_transcript_is_rebuilt():
     reg = Registry()
     production.build(reg, _StubDB())
-    steps = list(reg.flows[("post_meeting", 5)].steps)
+    steps = list(reg.flows[("post_meeting", 6)].steps)
     assert steps.index("retranscribe") < steps.index("process_meeting")
     assert reg.step_needs["retranscribe"] == frozenset({"meetings"})
-    assert ("post_meeting", 4) not in reg.flows
+    assert ("post_meeting", 5) not in reg.flows

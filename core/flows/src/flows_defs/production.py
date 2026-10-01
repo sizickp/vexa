@@ -1979,15 +1979,20 @@ def build(reg: Registry, db) -> None:
     # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
     # steps stay in the vocabulary; a flow is retired by not registering it, and `flows_submit`
     # would refuse to resurrect one anyway without a human writing the row.
-    # VERSION 5 — `retranscribe` runs FIRST: the report is written from the transcript rebuilt out
-    # of the whole recording, not from the live windows. The number is one above the highest this
-    # flow name has carried, and that is the rule rather than a coincidence: `match()` takes the
-    # newest version wherever it came from (versions were also authored through the API), so a
-    # code change that does not clear the highest DB version is inert — the defect
-    # `Registry.shadowing_versions` warns about.
-    reg.flow(name="post_meeting", version=5, on=COMPLETED,
-             steps=[s["retranscribe"], s["process_meeting"], s["email_minutes"],
-                    s["email_attendees"], s["drop_to_attendees"]])
+    # VERSION 6 — THE REPORT LANDS ON DESKS AND IS MAILED TO NOBODY. `retranscribe` runs first, so
+    # the report is written from the transcript rebuilt out of the whole recording; then the
+    # report is dropped onto every desk in the room. `email_minutes` and `email_attendees` are
+    # NOT in this flow: whether a meeting's report leaves the deployment by mail is decided here,
+    # by the list of steps, and not by whether a mail transport happens to be configured — so
+    # configuring one for another purpose sends no minutes to anyone. Both steps stay in the
+    # vocabulary for a flow that wants them.
+    #
+    # The number is one above the highest this flow name has carried, and that is the rule
+    # rather than a coincidence: `match()` takes the newest version wherever it came from
+    # (versions were also authored through the API), so a code change that does not clear the
+    # highest DB version is inert — the defect `Registry.shadowing_versions` warns about.
+    reg.flow(name="post_meeting", version=6, on=COMPLETED,
+             steps=[s["retranscribe"], s["process_meeting"], s["drop_to_attendees"]])
     # THE QUEUE FLOW THIS FILE KEEPS (PRD decision 42.2). It is one step and produces no effect:
     # what it produces is a REACTION ROW in a state a person can be told about — pending while a
     # call runs. That row is the queue. Its two siblings, the desk cards, are `production_agent`'s.

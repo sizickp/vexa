@@ -400,18 +400,37 @@ def test_a_retry_after_a_partial_failure_finishes_the_rest(monkeypatch):
     assert sorted(store.writes) == [("uid-ben", ENTITY), ("uid-ben", INDEX)]   # only ben's
 
 
-# ── the step is in the flow, after the mail ──────────────────────────────────────────────────
-def test_drop_to_attendees_runs_after_email_attendees_in_post_meeting():
+# ── the step is in the flow, and the mail is not ─────────────────────────────────────────────
+def test_post_meeting_drops_the_report_on_desks_and_mails_nobody():
     reg = Registry()
     production.build(reg, _StubDB())
-    steps = list(reg.flows[("post_meeting", 5)].steps)
-    assert steps == ["retranscribe", "process_meeting", "email_minutes",
-                     "email_attendees", "drop_to_attendees"]
-    # DECISION 29: the minutes are never gated on setup.  used to lead this
-    # list and mail "Finish the setup conversation and the minutes arrive right after" while it
-    # waited; the founder's ruling on that mail was "no we do not want that".
+    steps = list(reg.flows[("post_meeting", 6)].steps)
+    assert steps == ["retranscribe", "process_meeting", "drop_to_attendees"]
+    # WHETHER A REPORT LEAVES BY MAIL IS DECIDED BY THE FLOW, not by a transport being configured:
+    # neither mailing step is in it, so no meeting's report is mailed to anyone.
+    assert "email_minutes" not in steps and "email_attendees" not in steps
+    assert {"email_minutes", "email_attendees"} <= set(reg.steps), "both stay in the vocabulary"
+    # DECISION 29: the minutes are never gated on setup.
     assert "require_workspace" not in steps
     assert ("post_meeting", 1) not in reg.flows, "the old version is not re-registered"
+    assert ("post_meeting", 5) not in reg.flows
+
+
+def test_the_report_reaches_the_owner_desk_with_no_mailing_step_before_it(monkeypatch):
+    """The flow as registered: `drop_to_attendees` runs straight after `process_meeting`, with no
+    receipt from either mailing step — the shape every meeting has in this flow. An API-sent
+    meeting carries no invite, so the owner's desk is the only one, and it still gets the report."""
+    store = Store()
+    reg = _rig(monkeypatch, store)
+    monkeypatch.setattr(production.mt, "meeting_start", lambda *a, **k: None)
+    refs = {"uid": "uid-ada", "meeting_id": "41", "native": "room@jitsi.example", "platform": "jitsi"}
+    out = reg.steps["drop_to_attendees"](
+        _ctx(refs, {"process_meeting": {"report": "# Weekly\n\nBackups move by Friday."}}))
+    assert out.result["failed"] == [] and out.result["dropped"] == 1
+    assert store.users == [], "nobody is looked up or minted: the owner is the uid itself"
+    written = [path for uid, path in store.writes if uid == "uid-ada"]
+    assert INDEX in written and any(p.startswith("kg/entities/meeting/") and p != INDEX for p in written)
+    assert "Backups move by Friday." in "".join(store.files.values())
 
 
 # ── the economics bound: the drop is ENTITY-FREE ─────────────────────────────────────────────
