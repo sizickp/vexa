@@ -122,6 +122,25 @@ def test_the_coverage_floor_refuses_a_thinner_transcript():
     assert core.thinner_than_live([{"text": "anything"}], []) is False                       # nothing to lose
 
 
+def _minute(i: int, text: str) -> dict:
+    return {"start": ORIGIN + i * 60 + 5, "end": ORIGIN + i * 60 + 50, "text": text}
+
+
+def test_a_silent_stretch_of_the_recording_is_a_gap_whatever_the_total_says():
+    talk = " ".join(["слово"] * 30)
+    live = [_minute(i, talk) for i in range(10)]                             # ten full minutes
+    whole = [_minute(i, talk) for i in range(10)]
+    assert core.first_gap(whole, live) is None
+    holed = [_minute(i, talk) for i in range(10) if i not in (6, 7)]         # two minutes lost: 80% overall
+    assert not core.thinner_than_live(holed, live)                           # …clears the coverage floor
+    assert core.first_gap(holed, live) == {"at_s": 360, "live_words": 30, "words": 0}
+    # one long rebuilt segment across a window border covers both windows
+    spanning = [{"start": ORIGIN + 5, "end": ORIGIN + 110, "text": " ".join(["слово"] * 60)}]
+    assert core.first_gap(spanning, live[:2]) is None
+    # a quiet minute in the live transcript is not evidence of anything
+    assert core.first_gap([], [_minute(0, "да нет")]) is None
+
+
 def test_the_meeting_language_is_the_one_its_live_segments_carry():
     assert core.dominant_language([{"language": "ru"}, {"language": "ru"}, {"language": "en"}], "de") == "ru"
     assert core.dominant_language([{"language": None}], "de") == "de"
@@ -162,6 +181,17 @@ async def test_a_recording_with_gaps_never_replaces_a_fuller_live_transcript():
                               user_id=USER, meeting_id=MID)
     assert state["status"] == "skipped" and "fewer words" in state["reason"]
     assert _texts(store) == [s["text"] for s in LIVE]                        # live rows untouched
+
+
+async def test_a_recording_with_a_lost_stretch_keeps_the_live_transcript():
+    talk = " ".join(["слово"] * 30)
+    live = [{**_minute(i, talk), "speaker": "Анна", "language": "ru", "completed": True,
+             "segment_id": f"l{i}"} for i in range(10)]
+    stt = [{"start": i * 60 + 5, "end": i * 60 + 50, "text": talk} for i in range(10) if i not in (6, 7)]
+    store, repo, storage = await _rig(live=live)
+    state = await service.run(store, repo, storage, FakeStt(stt), user_id=USER, meeting_id=MID)
+    assert state["status"] == "skipped" and "gap at 6:00" in state["reason"]
+    assert len(_texts(store)) == 10                                          # live rows untouched
 
 
 async def test_no_recording_no_backend_and_no_speech_are_skips_not_failures():

@@ -85,7 +85,7 @@ starts nothing. A run ends in one of three states, each with a `reason` and coun
 | `status` | Meaning |
 |---|---|
 | `completed` | The transcript was replaced. Speaker names come from the live transcript — the recording is one mixed track. |
-| `skipped` | Nothing was replaced: no audio recording, no transcription backend configured, no speech in the recording, or the rebuilt transcript held fewer than 60% of the live transcript's words (a recording with gaps can only lose speech). |
+| `skipped` | Nothing was replaced: no audio recording, no transcription backend configured, no speech in the recording, or the recording has gaps — the rebuilt transcript held fewer than 60% of the live transcript's words, or almost nothing for a minute the live transcript has speech in (a recording with gaps can only lose speech). |
 | `failed` | The backend or storage refused; the live transcript stays. |
 
 Send `{"force": true}` to run it again. A meeting that is not `completed` answers `409`. The key

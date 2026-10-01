@@ -38,8 +38,9 @@ stops renewing, and the first poll after the 90 s lease starts it again.
    the live transcript carries the platform's speaker signal.
 4. Replaces the meeting's `transcriptions` rows in one transaction.
 
-A rewrite that holds fewer than 60% of the live transcript's words is refused (`skipped`): a
-recording with gaps can only lose speech, and the live transcript stays.
+A recording with gaps can only lose speech, so two checks refuse the rewrite (`skipped`) and keep the
+live transcript: the rewrite holds fewer than 60% of the live transcript's words overall, or some
+minute where the live transcript holds 20 words or more has under a quarter of them in the rewrite.
 
 ## Layout
 

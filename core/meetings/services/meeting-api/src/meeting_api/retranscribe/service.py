@@ -91,6 +91,13 @@ async def run(
             return await finish(
                 "skipped", reason="the recording yields fewer words than the live transcript "
                                   "(a recording with gaps) — the live transcript is kept", **counts)
+        gap = core.first_gap(rows, live)
+        if gap is not None:
+            at = f"{gap['at_s'] // 60}:{gap['at_s'] % 60:02d}"
+            return await finish(
+                "skipped", reason=f"the recording has a gap at {at} ({gap['live_words']} words in the "
+                                  f"live transcript, {gap['words']} in the recording) — the live "
+                                  "transcript is kept", **counts)
         written = await store.replace_transcript(meeting_id, rows)
         return await finish("completed", reason=None, segments=written, run_id=run_id,
                             unnamed=sum(1 for r in rows if not r["speaker"]), **counts)

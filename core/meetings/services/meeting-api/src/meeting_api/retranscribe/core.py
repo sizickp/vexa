@@ -94,6 +94,52 @@ def thinner_than_live(rows: list[dict], live: list[dict], floor: float = COVERAG
     return live_words > 0 and word_count(rows) < floor * live_words
 
 
+GAP_WINDOW_S = 60.0       # the stretch a gap is looked for in
+GAP_LIVE_WORDS = 20       # …when the live transcript holds at least this many words there
+GAP_FLOOR = 0.25          # …and the rewrite holds less than this share of them
+
+
+def _words_per_window(segments: list[dict], origin: float, window_s: float) -> dict[int, float]:
+    """Each segment's words spread over the windows it spans, in proportion to the overlap."""
+    out: dict[int, float] = {}
+    for s in segments:
+        words = len(str(s.get("text") or "").split())
+        if not words:
+            continue
+        start = float(s.get("start") or 0.0) - origin
+        end = max(float(s.get("end") or 0.0) - origin, start)
+        if end - start <= 0:
+            out[int(start // window_s)] = out.get(int(start // window_s), 0.0) + words
+            continue
+        for w in range(int(start // window_s), int(end // window_s) + 1):
+            overlap = min(end, (w + 1) * window_s) - max(start, w * window_s)
+            if overlap > 0:
+                out[w] = out.get(w, 0.0) + words * overlap / (end - start)
+    return out
+
+
+def first_gap(rows: list[dict], live: list[dict], *, window_s: float = GAP_WINDOW_S,
+              min_live_words: int = GAP_LIVE_WORDS, floor: float = GAP_FLOOR) -> Optional[dict]:
+    """The first stretch where the live transcript holds speech and the rewrite almost none — a GAP
+    IN THE RECORDING — or ``None``.
+
+    A recording that lost a stretch is silent there, so the pass over it returns nothing for those
+    minutes while the live transcript, which heard the meeting directly, has them. The overall word
+    count hides that in a long meeting: a quarter of the hour can be missing and the rewrite still
+    clears the coverage floor. ``{at_s, live_words, words}`` — seconds from the first live segment."""
+    starts = [float(s.get("start") or 0.0) for s in live if str(s.get("text") or "").strip()]
+    if not starts:
+        return None
+    origin = min(starts)
+    had = _words_per_window(live, origin, window_s)
+    got = _words_per_window(rows, origin, window_s)
+    for w in sorted(had):
+        if had[w] >= min_live_words and got.get(w, 0.0) < floor * had[w]:
+            return {"at_s": int(w * window_s), "live_words": int(round(had[w])),
+                    "words": int(round(got.get(w, 0.0)))}
+    return None
+
+
 def dominant_language(live: list[dict], default: Optional[str]) -> Optional[str]:
     """The language most live segments carry — the meeting's own — else the deployment default."""
     counts: dict[str, int] = {}
